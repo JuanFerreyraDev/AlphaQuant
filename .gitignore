@@ -36,9 +36,9 @@ logs/*
 !logs/.gitkeep
 
 # Data
-data/*.csv
-!data/.gitkeep
+data/raw_csv/*.csv
+!data/raw_csv/.gitkeep
 
 # Models
-models/*
-!models/.gitkeep
+data/models/*
+!data/models/.gitkeep
