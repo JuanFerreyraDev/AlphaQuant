@@ -1,0 +1,12 @@
+global:
+  active_market: futures
+  timeframe: 1d
+  risk_per_trade_pct: 1.0
+futures:
+  default_leverage: 2
+  margin_type: ISOLATED
+  symbols:
+  - BTC_USDT
+spot:
+  symbols:
+  - BTC_USDT
