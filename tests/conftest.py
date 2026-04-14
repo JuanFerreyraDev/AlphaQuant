@@ -25,3 +25,10 @@ def ohlcv_df() -> pd.DataFrame:
             "volume": np.random.uniform(1000, 5000, n),
         }
     )
+
+@pytest.fixture
+def ohlcv_df_with_technicals(ohlcv_df: pd.DataFrame) -> pd.DataFrame:
+    """OHLCV DataFrame with all technical indicators pre-computed."""
+    from src.brain.features import compute_all_technicals
+
+    return compute_all_technicals(ohlcv_df.copy())
