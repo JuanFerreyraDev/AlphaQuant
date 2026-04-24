@@ -32,3 +32,17 @@ def ohlcv_df_with_technicals(ohlcv_df: pd.DataFrame) -> pd.DataFrame:
     from src.brain.features import compute_all_technicals
 
     return compute_all_technicals(ohlcv_df.copy())
+
+@pytest.fixture
+def sample_model_dict() -> dict[str, Any]:
+    """Valid model dict with all REQUIRED_KEYS expected by tasks.py."""
+    mock_model = MagicMock()
+    mock_model.predict_proba.return_value = np.array([[0.2, 0.8]])
+    return {
+        "model": mock_model,
+        "features": ["rsi_14", "macd"],
+        "threshold": 0.6,
+        "atr_tp_multi": 2.0,
+        "atr_sl_multi": 1.0,
+        "strategy_name": "TestStrategy",
+    }
