@@ -4,6 +4,8 @@ Single responsibility: execute trades on Binance Futures robustly, with
 isolated margin management, dynamic leverage, position sizing based on
 the 1% balance rule, and automatic protection via STOP_MARKET /
 TAKE_PROFIT_MARKET orders using the Algo Orders API.
+
+DECOUPLING RULE: This module does NOT import anything from ``src.api.telegram``.
 """
 
 import logging
@@ -44,7 +46,7 @@ class BinanceExecutor:
 
         if not api_key or not api_secret:
             raise ValueError(
-                "BINANCE_API_KEY and BINANCE_API_SECRET must be defined in .env"
+                "BINANCE_API_KEY y BINANCE_API_SECRET deben estar definidos en .env"
             )
 
         self.client: Client = Client(api_key, api_secret, testnet=use_testnet)
@@ -82,7 +84,7 @@ class BinanceExecutor:
                     return True
             return False
         except BinanceAPIException as exc:
-            logger.error("Error checking open positions for %s: %s", symbol, exc)
+            logger.error("Error consultando posiciones para %s: %s", symbol, exc)
             return True
 
     def _configure_symbol(self, symbol: str) -> bool:
@@ -315,6 +317,53 @@ class BinanceExecutor:
                 "Error placing %s order for %s: %s", order_type, symbol, exc
             )
             return None
+
+    def get_futures_balance(self) -> float:
+        """Return the available USDT balance in the Futures account."""
+        return self._get_futures_balance()
+
+    def get_open_positions(self) -> list[dict[str, Any]]:
+        """Return all currently open Futures positions.
+
+        Returns:
+            List of position dicts from the Binance API that have a
+            non-zero ``positionAmt``.
+        """
+        positions = self.client.futures_position_information()
+        return [p for p in positions if float(p.get("positionAmt", 0)) != 0.0]
+
+    def close_all_positions(self) -> int:
+        """Close all open Futures positions and cancel all pending orders.
+
+        Returns:
+            Number of positions successfully closed.
+        """
+        positions = self.client.futures_position_information()
+        open_pos = [p for p in positions if float(p.get("positionAmt", 0)) != 0.0]
+        closed = 0
+        symbols_touched: set[str] = set()
+
+        for p in open_pos:
+            sym = p["symbol"]
+            amt = float(p["positionAmt"])
+            side = "SELL" if amt > 0 else "BUY"
+            try:
+                self.client.futures_create_order(
+                    symbol=sym, side=side, type="MARKET", quantity=abs(amt),
+                )
+                closed += 1
+                symbols_touched.add(sym)
+            except BinanceAPIException as exc:
+                logger.error("Error closing position %s: %s", sym, exc)
+                symbols_touched.add(sym)
+
+        for sym in symbols_touched:
+            try:
+                self.client.futures_cancel_all_open_orders(symbol=sym)
+            except BinanceAPIException as exc:
+                logger.error("Error cancelling open orders for %s: %s", sym, exc)
+
+        return closed
 
     def execute_futures_trade(
         self,
