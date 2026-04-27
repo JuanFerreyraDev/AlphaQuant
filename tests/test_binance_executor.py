@@ -449,3 +449,153 @@ class TestExecuteFuturesTrade:
         executor.execute_futures_trade("BTC/USDT:USDT", "BUY", 58000.0, 65000.0)
 
         executor._has_open_position.assert_called_once_with("BTCUSDT")
+
+
+class TestGetFuturesBalancePublic:
+    """Tests for the public ``get_futures_balance()`` wrapper."""
+
+    def test_delegates_to_private_method(self) -> None:
+        """``get_futures_balance()`` returns the value from ``_get_futures_balance()``."""
+        executor = _build_executor()
+        executor.client.futures_account_balance.return_value = [
+            {"asset": "USDT", "availableBalance": "999.99"},
+        ]
+
+        result = executor.get_futures_balance()
+
+        assert result == 999.99
+
+
+class TestGetOpenPositions:
+    """Tests for ``get_open_positions()``.
+
+    The method must call ``futures_position_information`` without filtering by
+    symbol and return **only** positions whose ``positionAmt`` is not zero.
+    """
+
+    def test_filters_only_nonzero_positions(self) -> None:
+        """Given a mixed list of positions (zero, positive, negative),
+        only those with ``positionAmt != 0.0`` are returned.
+        """
+        executor = _build_executor()
+        executor.client.futures_position_information.return_value = [
+            {"symbol": "BTCUSDT",  "positionAmt": "0.000"},
+            {"symbol": "ETHUSDT",  "positionAmt": "1.5"},
+            {"symbol": "BNBUSDT",  "positionAmt": "0.0"},
+            {"symbol": "SOLUSDT",  "positionAmt": "-0.5"},
+            {"symbol": "DOGEUSDT", "positionAmt": "0"},
+        ]
+
+        result = executor.get_open_positions()
+
+        assert len(result) == 2
+        symbols = [p["symbol"] for p in result]
+        assert "ETHUSDT" in symbols
+        assert "SOLUSDT" in symbols
+
+    def test_returns_empty_list_when_no_open_positions(self) -> None:
+        """If all positions have ``positionAmt`` of zero, an empty list is returned."""
+        executor = _build_executor()
+        executor.client.futures_position_information.return_value = [
+            {"symbol": "BTCUSDT", "positionAmt": "0.000"},
+            {"symbol": "ETHUSDT", "positionAmt": "0"},
+        ]
+
+        result = executor.get_open_positions()
+
+        assert result == []
+
+    def test_returns_empty_list_when_no_positions_at_all(self) -> None:
+        """If the API returns an empty list, the method returns an empty list."""
+        executor = _build_executor()
+        executor.client.futures_position_information.return_value = []
+
+        result = executor.get_open_positions()
+
+        assert result == []
+
+
+class TestCloseAllPositions:
+    """Tests for ``close_all_positions()``.
+
+    The method iterates over open positions, sends inverse MARKET orders to
+    close each one, and then cancels all open orders for the affected symbols.
+    It captures ``BinanceAPIException`` per symbol so a single failure does
+    not abort the loop.
+    """
+
+    def test_happy_path_long_and_short(self) -> None:
+        """Verify that a Long position triggers a SELL close order and a Short
+        position triggers a BUY close order.  Also verify that
+        ``futures_cancel_all_open_orders`` is called for each affected symbol.
+        """
+        executor = _build_executor()
+        executor.client.futures_position_information.return_value = [
+            {"symbol": "BTCUSDT", "positionAmt": "1.5"},
+            {"symbol": "ETHUSDT", "positionAmt": "-0.5"},
+            {"symbol": "BNBUSDT", "positionAmt": "0.0"},
+        ]
+        executor.client.futures_create_order.return_value = {"orderId": "OK"}
+
+        closed = executor.close_all_positions()
+
+        assert closed == 2
+
+        calls = executor.client.futures_create_order.call_args_list
+        assert len(calls) == 2
+
+        _, kwargs_btc = calls[0]
+        assert kwargs_btc["symbol"] == "BTCUSDT"
+        assert kwargs_btc["side"] == "SELL"
+        assert kwargs_btc["type"] == "MARKET"
+        assert kwargs_btc["quantity"] == 1.5
+
+        _, kwargs_eth = calls[1]
+        assert kwargs_eth["symbol"] == "ETHUSDT"
+        assert kwargs_eth["side"] == "BUY"
+        assert kwargs_eth["type"] == "MARKET"
+        assert kwargs_eth["quantity"] == 0.5
+
+        cancel_calls = executor.client.futures_cancel_all_open_orders.call_args_list
+        cancelled_symbols = {c.kwargs["symbol"] for c in cancel_calls}
+        assert cancelled_symbols == {"BTCUSDT", "ETHUSDT"}
+
+    def test_with_exception_continues_and_cancels_both(self) -> None:
+        """If ``futures_create_order`` raises ``BinanceAPIException`` for the
+        first symbol, the loop must continue, successfully close the second
+        symbol, and still attempt to cancel open orders for **both** symbols.
+        """
+        executor = _build_executor()
+        executor.client.futures_position_information.return_value = [
+            {"symbol": "BTCUSDT", "positionAmt": "2.0"},
+            {"symbol": "ETHUSDT", "positionAmt": "-1.0"},
+        ]
+
+        executor.client.futures_create_order.side_effect = [
+            _make_api_exception(-2010, "Insufficient margin"),
+            {"orderId": "OK"},
+        ]
+
+        closed = executor.close_all_positions()
+
+        assert closed == 1
+        assert executor.client.futures_create_order.call_count == 2
+
+        cancel_calls = executor.client.futures_cancel_all_open_orders.call_args_list
+        cancelled_symbols = {c.kwargs["symbol"] for c in cancel_calls}
+        assert cancelled_symbols == {"BTCUSDT", "ETHUSDT"}
+
+    def test_returns_zero_when_no_open_positions(self) -> None:
+        """If there are no open positions, ``close_all_positions`` returns 0
+        and no orders or cancellations are attempted.
+        """
+        executor = _build_executor()
+        executor.client.futures_position_information.return_value = [
+            {"symbol": "BTCUSDT", "positionAmt": "0.0"},
+        ]
+
+        closed = executor.close_all_positions()
+
+        assert closed == 0
+        executor.client.futures_create_order.assert_not_called()
+        executor.client.futures_cancel_all_open_orders.assert_not_called()
