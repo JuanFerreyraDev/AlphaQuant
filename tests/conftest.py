@@ -26,12 +26,14 @@ def ohlcv_df() -> pd.DataFrame:
         }
     )
 
+
 @pytest.fixture
 def ohlcv_df_with_technicals(ohlcv_df: pd.DataFrame) -> pd.DataFrame:
     """OHLCV DataFrame with all technical indicators pre-computed."""
     from src.brain.features import compute_all_technicals
 
     return compute_all_technicals(ohlcv_df.copy())
+
 
 @pytest.fixture
 def sample_model_dict() -> dict[str, Any]:
@@ -46,3 +48,11 @@ def sample_model_dict() -> dict[str, Any]:
         "atr_sl_multi": 1.0,
         "strategy_name": "TestStrategy",
     }
+
+ 
+@pytest.fixture
+def mock_telegram_app() -> MagicMock:
+    """Pre-configured mock of telegram.ext.Application."""
+    app = MagicMock()
+    app.bot.send_message = AsyncMock()
+    return app
