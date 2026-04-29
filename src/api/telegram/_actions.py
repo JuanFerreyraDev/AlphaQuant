@@ -62,68 +62,14 @@ async def _on_clear(query: Any, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def _on_train(query: Any, context: ContextTypes.DEFAULT_TYPE) -> int:
-    paused = context.application.bot_data.get("paused", False)
-    await query.edit_message_text(
-        "⏳ Starting training in background...",
-        reply_markup=_kb_back("menu:bot"), parse_mode="HTML",
+    """
+    STUB: Training logic temporarily disabled until the src.engine.tasks module is implemented.
+    """
+    await query.answer(
+        "🚧 Function under development. Coming soon!", 
+        show_alert=True
     )
-
-    async def _run() -> None:
-        try:
-            from src.config.settings_loader import get_active_symbols as _symbols
-            from src.engine.tasks import (
-                _check_training_freshness,
-                _sanitize_symbol,
-                run_full_training_pipeline,
-            )
-
-            symbols = _symbols()
-            if not symbols:
-                await query.edit_message_text(
-                    "❌ No active symbols to train.",
-                    reply_markup=_kb_bot(paused), parse_mode="HTML",
-                )
-                return
-
-            results: list[str] = []
-            for s in symbols:
-                safe = _sanitize_symbol(s)
-                needs_training, reason = _check_training_freshness(safe)
-
-                if not needs_training:
-                    results.append(
-                        f"⏭️ {html.escape(safe)}: Omitted ({html.escape(reason)})."
-                    )
-                    continue
-
-                try:
-                    await asyncio.to_thread(run_full_training_pipeline, s)
-                    results.append(
-                        f"✅ {html.escape(safe)}: Trained and updated."
-                    )
-                except Exception as exc:
-                    logger.error("Error in pipeline of %s: %s", safe, exc)
-                    results.append(
-                        f"❌ {html.escape(safe)}: Error during the "
-                        f"optimization/training."
-                    )
-
-            summary = (
-                "📊 <b>Training Summary MLOps:</b>\n\n"
-                + "\n".join(results)
-            )
-            await query.edit_message_text(
-                summary,
-                reply_markup=_kb_bot(paused), parse_mode="HTML",
-            )
-        except Exception as exc:
-            logger.error("Error in training: %s", exc)
-            await query.edit_message_text(
-                f"❌ Error during training: <code>{html.escape(str(exc))}</code>",
-                reply_markup=_kb_bot(paused), parse_mode="HTML",
-            )
-
-    asyncio.create_task(_run())
+    
     return NAVIGATING
 
 
