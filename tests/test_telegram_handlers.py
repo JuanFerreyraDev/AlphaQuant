@@ -287,14 +287,15 @@ class TestBotActions:
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram._actions.asyncio.create_task", side_effect=lambda coro: coro.close())
-    async def test_train_starts_background_task(self, mock_task: MagicMock, _ma: MagicMock) -> None:
+    async def test_train_shows_coming_soon_alert(self, _ma: MagicMock) -> None:
         update = _make_callback_update(data="action:train")
         result = await handle_callback(update, _make_context())
         assert result == NAVIGATING
-        mock_task.assert_called_once()
-        text = update.callback_query.edit_message_text.call_args[0][0]
-        assert "training" in text.lower()
+        update.callback_query.answer.assert_awaited_with(
+            "🚧 Function under development. Coming soon!",
+            show_alert=True,
+        )
+        update.callback_query.edit_message_text.assert_not_awaited()
 
 
 class TestFuturesActions:
