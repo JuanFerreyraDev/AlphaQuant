@@ -13,7 +13,11 @@ from typing import Any
 
 from telegram.ext import ContextTypes
 
-from src.config.settings_loader import load_settings, save_settings
+from src.config.settings_loader import (
+    load_settings,
+    save_settings,
+    get_active_symbols,
+)
 
 from ._ui import (
     NAVIGATING,
@@ -62,14 +66,72 @@ async def _on_clear(query: Any, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def _on_train(query: Any, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    STUB: Training logic temporarily disabled until the src.engine.tasks module is implemented.
-    """
-    await query.answer(
-        "🚧 Function under development. Coming soon!", 
-        show_alert=True
+    paused = context.application.bot_data.get("paused", False)
+
+    train_pipeline = context.application.bot_data.get("train_pipeline")
+
+    if train_pipeline is None:
+        await query.edit_message_text(
+            "❌ Internal Error: Training pipeline function not configured.",
+            reply_markup=_kb_bot(paused), parse_mode="HTML",
+        )
+        return NAVIGATING
+
+    await query.edit_message_text(
+        "⏳ Starting training pipeline...\n\n",
+        reply_markup=_kb_back("menu:bot"), parse_mode="HTML",
     )
-    
+
+    async def _run() -> None:
+        try:
+            symbols = get_active_symbols()
+            if not symbols:
+                await query.edit_message_text(
+                    "❌ There are no active symbols to train.",
+                    reply_markup=_kb_bot(paused), parse_mode="HTML",
+                )
+                return
+
+            results: list[str] = []
+            for s in symbols:
+                try:
+                    
+                    needs_training, safe, reason = await asyncio.to_thread(
+                        train_pipeline, s
+                    )
+
+                    if not needs_training:
+                        results.append(
+                            f"⏭️ {html.escape(safe)}: Omitted ({html.escape(reason)})."
+                        )
+                        continue
+
+                    results.append(
+                        f"✅ {html.escape(safe)}: Trained and up-to-date."
+                    )
+                except Exception as exc:
+                    logger.error("Pipe error %s: %s", safe, exc)
+                    results.append(
+                        f"❌ {html.escape(safe)}: Error during the "
+                        f" optimization/training."
+                    )
+
+            summary = (
+                "📊 <b>MLOps Training Summary:</b>\n\n"
+                + "\n".join(results)
+            )
+            await query.edit_message_text(
+                summary,
+                reply_markup=_kb_bot(paused), parse_mode="HTML",
+            )
+        except Exception as exc:
+            logger.error("Error in training: %s", exc)
+            await query.edit_message_text(
+                f"❌ Error during training: <code>{html.escape(str(exc))}</code>",
+                reply_markup=_kb_bot(paused), parse_mode="HTML",
+            )
+
+    asyncio.create_task(_run())
     return NAVIGATING
 
 

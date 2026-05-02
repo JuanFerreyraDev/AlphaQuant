@@ -287,15 +287,13 @@ class TestBotActions:
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    async def test_train_shows_coming_soon_alert(self, _ma: MagicMock) -> None:
+    async def test_train_shows_error_when_pipeline_not_configured(self, _ma: MagicMock) -> None:
         update = _make_callback_update(data="action:train")
         result = await handle_callback(update, _make_context())
         assert result == NAVIGATING
-        update.callback_query.answer.assert_awaited_with(
-            "🚧 Function under development. Coming soon!",
-            show_alert=True,
-        )
-        update.callback_query.edit_message_text.assert_not_awaited()
+        update.callback_query.edit_message_text.assert_awaited_once()
+        text = update.callback_query.edit_message_text.call_args[0][0]
+        assert "Internal Error" in text
 
 
 class TestFuturesActions:
