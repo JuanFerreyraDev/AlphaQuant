@@ -38,6 +38,7 @@ async def _post_init(app: Application) -> None:
 
     try:
         from src.api.binance.binance_executor import BinanceExecutor
+
         app.bot_data["executor"] = BinanceExecutor()
         logger.info("BinanceExecutor injected into bot_data.")
     except (ValueError, Exception) as exc:

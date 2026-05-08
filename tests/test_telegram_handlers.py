@@ -22,7 +22,6 @@ from src.api.telegram.handlers import (
     start_command,
 )
 
-
 # --- Helpers ---
 
 
@@ -62,39 +61,53 @@ def _make_context(evaluate_fn=None, paused: bool = False, executor=None) -> Magi
 
 
 class TestCheckCredentials:
-    @patch.dict("os.environ", {
-        "AUTHORIZED_CHAT_ID": "123",
-        "BINANCE_API_KEY": "key",
-        "BINANCE_API_SECRET": "secret",
-    })
+    @patch.dict(
+        "os.environ",
+        {
+            "AUTHORIZED_CHAT_ID": "123",
+            "BINANCE_API_KEY": "key",
+            "BINANCE_API_SECRET": "secret",
+        },
+    )
     def test_returns_ok_when_all_present(self) -> None:
         ok, cid = _check_credentials()
         assert ok is True
         assert cid == 123
 
-    @patch.dict("os.environ", {
-        "AUTHORIZED_CHAT_ID": "123",
-        "BINANCE_API_KEY": "",
-        "BINANCE_API_SECRET": "secret",
-    }, clear=True)
+    @patch.dict(
+        "os.environ",
+        {
+            "AUTHORIZED_CHAT_ID": "123",
+            "BINANCE_API_KEY": "",
+            "BINANCE_API_SECRET": "secret",
+        },
+        clear=True,
+    )
     def test_returns_false_when_api_key_missing(self) -> None:
         ok, _ = _check_credentials()
         assert ok is False
 
-    @patch.dict("os.environ", {
-        "AUTHORIZED_CHAT_ID": "",
-        "BINANCE_API_KEY": "key",
-        "BINANCE_API_SECRET": "secret",
-    }, clear=True)
+    @patch.dict(
+        "os.environ",
+        {
+            "AUTHORIZED_CHAT_ID": "",
+            "BINANCE_API_KEY": "key",
+            "BINANCE_API_SECRET": "secret",
+        },
+        clear=True,
+    )
     def test_returns_false_when_chat_id_missing(self) -> None:
         ok, _ = _check_credentials()
         assert ok is False
 
-    @patch.dict("os.environ", {
-        "AUTHORIZED_CHAT_ID": "abc",
-        "BINANCE_API_KEY": "key",
-        "BINANCE_API_SECRET": "secret",
-    })
+    @patch.dict(
+        "os.environ",
+        {
+            "AUTHORIZED_CHAT_ID": "abc",
+            "BINANCE_API_KEY": "key",
+            "BINANCE_API_SECRET": "secret",
+        },
+    )
     def test_returns_false_on_invalid_chat_id(self) -> None:
         ok, cid = _check_credentials()
         assert ok is False
@@ -187,10 +200,17 @@ class TestNavigationCallbacks:
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram._ui.load_settings", return_value={
-        "futures": {"margin_type": "ISOLATED", "default_leverage": 5, "symbols": ["BTC_USDT"]},
-        "global": {"risk_per_trade_pct": 1.0},
-    })
+    @patch(
+        "src.api.telegram._ui.load_settings",
+        return_value={
+            "futures": {
+                "margin_type": "ISOLATED",
+                "default_leverage": 5,
+                "symbols": ["BTC_USDT"],
+            },
+            "global": {"risk_per_trade_pct": 1.0},
+        },
+    )
     async def test_menu_futures(self, _ms: MagicMock, _ma: MagicMock) -> None:
         update = _make_callback_update(data="menu:futures")
         result = await handle_callback(update, _make_context())
@@ -220,10 +240,15 @@ class TestNavigationCallbacks:
 class TestBotActions:
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram._actions.load_settings", return_value={
-        "futures": {"symbols": ["BTC_USDT", "ETH_USDT"]},
-    })
-    async def test_status_shows_symbol_count(self, _ms: MagicMock, _ma: MagicMock) -> None:
+    @patch(
+        "src.api.telegram._actions.load_settings",
+        return_value={
+            "futures": {"symbols": ["BTC_USDT", "ETH_USDT"]},
+        },
+    )
+    async def test_status_shows_symbol_count(
+        self, _ms: MagicMock, _ma: MagicMock
+    ) -> None:
         update = _make_callback_update(data="action:status")
         context = _make_context(paused=False)
         result = await handle_callback(update, context)
@@ -257,19 +282,27 @@ class TestBotActions:
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram.handlers.load_settings", return_value={
-        "futures": {"symbols": ["BTC_USDT"]},
-    })
-    async def test_remove_symbol_enters_state(self, _ms: MagicMock, _ma: MagicMock) -> None:
+    @patch(
+        "src.api.telegram.handlers.load_settings",
+        return_value={
+            "futures": {"symbols": ["BTC_USDT"]},
+        },
+    )
+    async def test_remove_symbol_enters_state(
+        self, _ms: MagicMock, _ma: MagicMock
+    ) -> None:
         update = _make_callback_update(data="action:remove_symbol")
         result = await handle_callback(update, _make_context())
         assert result == WAITING_REMOVE_SYMBOL
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram.handlers.load_settings", return_value={
-        "futures": {"default_leverage": 10},
-    })
+    @patch(
+        "src.api.telegram.handlers.load_settings",
+        return_value={
+            "futures": {"default_leverage": 10},
+        },
+    )
     async def test_leverage_enters_state(self, _ms: MagicMock, _ma: MagicMock) -> None:
         update = _make_callback_update(data="action:leverage")
         result = await handle_callback(update, _make_context())
@@ -277,9 +310,12 @@ class TestBotActions:
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram.handlers.load_settings", return_value={
-        "global": {"risk_per_trade_pct": 1.0},
-    })
+    @patch(
+        "src.api.telegram.handlers.load_settings",
+        return_value={
+            "global": {"risk_per_trade_pct": 1.0},
+        },
+    )
     async def test_risk_enters_state(self, _ms: MagicMock, _ma: MagicMock) -> None:
         update = _make_callback_update(data="action:risk")
         result = await handle_callback(update, _make_context())
@@ -287,7 +323,9 @@ class TestBotActions:
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    async def test_train_shows_error_when_pipeline_not_configured(self, _ma: MagicMock) -> None:
+    async def test_train_shows_error_when_pipeline_not_configured(
+        self, _ma: MagicMock
+    ) -> None:
         update = _make_callback_update(data="action:train")
         result = await handle_callback(update, _make_context())
         assert result == NAVIGATING
@@ -299,12 +337,18 @@ class TestBotActions:
 class TestFuturesActions:
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram._actions.load_settings", return_value={
-        "futures": {"margin_type": "ISOLATED"},
-    })
+    @patch(
+        "src.api.telegram._actions.load_settings",
+        return_value={
+            "futures": {"margin_type": "ISOLATED"},
+        },
+    )
     @patch("src.api.telegram._actions.save_settings")
     async def test_margin_toggle_isolated_to_crossed(
-        self, mock_save: MagicMock, _ms: MagicMock, _ma: MagicMock,
+        self,
+        mock_save: MagicMock,
+        _ms: MagicMock,
+        _ma: MagicMock,
     ) -> None:
         update = _make_callback_update(data="action:margin_toggle")
         await handle_callback(update, _make_context())
@@ -313,12 +357,18 @@ class TestFuturesActions:
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram._actions.load_settings", return_value={
-        "futures": {"margin_type": "CROSSED"},
-    })
+    @patch(
+        "src.api.telegram._actions.load_settings",
+        return_value={
+            "futures": {"margin_type": "CROSSED"},
+        },
+    )
     @patch("src.api.telegram._actions.save_settings")
     async def test_margin_toggle_crossed_to_isolated(
-        self, mock_save: MagicMock, _ms: MagicMock, _ma: MagicMock,
+        self,
+        mock_save: MagicMock,
+        _ms: MagicMock,
+        _ma: MagicMock,
     ) -> None:
         update = _make_callback_update(data="action:margin_toggle")
         await handle_callback(update, _make_context())
@@ -336,10 +386,15 @@ class TestFuturesActions:
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram._ui.load_settings", return_value={
-        "futures": {"margin_type": "ISOLATED"},
-    })
-    async def test_panic_cancel_returns_futures(self, _ms: MagicMock, _ma: MagicMock) -> None:
+    @patch(
+        "src.api.telegram._ui.load_settings",
+        return_value={
+            "futures": {"margin_type": "ISOLATED"},
+        },
+    )
+    async def test_panic_cancel_returns_futures(
+        self, _ms: MagicMock, _ma: MagicMock
+    ) -> None:
         update = _make_callback_update(data="action:panic_cancel")
         result = await handle_callback(update, _make_context())
         assert result == NAVIGATING
@@ -366,9 +421,12 @@ class TestFuturesActions:
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram._ui.load_settings", return_value={
-        "futures": {"margin_type": "ISOLATED"},
-    })
+    @patch(
+        "src.api.telegram._ui.load_settings",
+        return_value={
+            "futures": {"margin_type": "ISOLATED"},
+        },
+    )
     async def test_scan_with_signals(self, _ms: MagicMock, _ma: MagicMock) -> None:
         mock_eval = AsyncMock(return_value=2)
         update = _make_callback_update(data="action:scan")
@@ -381,7 +439,11 @@ class TestFuturesActions:
 class TestBinanceActions:
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram._actions.asyncio.to_thread", new_callable=AsyncMock, return_value=1234.5678)
+    @patch(
+        "src.api.telegram._actions.asyncio.to_thread",
+        new_callable=AsyncMock,
+        return_value=1234.5678,
+    )
     async def test_balance_success(self, _mt: MagicMock, _ma: MagicMock) -> None:
         update = _make_callback_update(data="action:balance")
         result = await handle_callback(update, _make_context())
@@ -391,7 +453,11 @@ class TestBinanceActions:
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram._actions.asyncio.to_thread", new_callable=AsyncMock, side_effect=Exception("API down"))
+    @patch(
+        "src.api.telegram._actions.asyncio.to_thread",
+        new_callable=AsyncMock,
+        side_effect=Exception("API down"),
+    )
     async def test_balance_error(self, _mt: MagicMock, _ma: MagicMock) -> None:
         update = _make_callback_update(data="action:balance")
         result = await handle_callback(update, _make_context())
@@ -401,7 +467,11 @@ class TestBinanceActions:
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram._actions.asyncio.to_thread", new_callable=AsyncMock, return_value=[])
+    @patch(
+        "src.api.telegram._actions.asyncio.to_thread",
+        new_callable=AsyncMock,
+        return_value=[],
+    )
     async def test_positions_empty(self, _mt: MagicMock, _ma: MagicMock) -> None:
         update = _make_callback_update(data="action:positions")
         result = await handle_callback(update, _make_context())
@@ -411,9 +481,18 @@ class TestBinanceActions:
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram._actions.asyncio.to_thread", new_callable=AsyncMock, return_value=[
-        {"symbol": "BTCUSDT", "positionAmt": "0.01", "entryPrice": "65000", "unRealizedProfit": "50.5"},
-    ])
+    @patch(
+        "src.api.telegram._actions.asyncio.to_thread",
+        new_callable=AsyncMock,
+        return_value=[
+            {
+                "symbol": "BTCUSDT",
+                "positionAmt": "0.01",
+                "entryPrice": "65000",
+                "unRealizedProfit": "50.5",
+            },
+        ],
+    )
     async def test_positions_with_data(self, _mt: MagicMock, _ma: MagicMock) -> None:
         update = _make_callback_update(data="action:positions")
         result = await handle_callback(update, _make_context())
@@ -423,7 +502,11 @@ class TestBinanceActions:
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram._actions.asyncio.to_thread", new_callable=AsyncMock, side_effect=Exception("err"))
+    @patch(
+        "src.api.telegram._actions.asyncio.to_thread",
+        new_callable=AsyncMock,
+        side_effect=Exception("err"),
+    )
     async def test_positions_error(self, _mt: MagicMock, _ma: MagicMock) -> None:
         update = _make_callback_update(data="action:positions")
         result = await handle_callback(update, _make_context())
@@ -433,9 +516,18 @@ class TestBinanceActions:
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram._ui.load_settings", return_value={"futures": {"margin_type": "ISOLATED"}})
-    @patch("src.api.telegram._actions.asyncio.to_thread", new_callable=AsyncMock, return_value=3)
-    async def test_panic_confirm_success(self, _mt: MagicMock, _ms: MagicMock, _ma: MagicMock) -> None:
+    @patch(
+        "src.api.telegram._ui.load_settings",
+        return_value={"futures": {"margin_type": "ISOLATED"}},
+    )
+    @patch(
+        "src.api.telegram._actions.asyncio.to_thread",
+        new_callable=AsyncMock,
+        return_value=3,
+    )
+    async def test_panic_confirm_success(
+        self, _mt: MagicMock, _ms: MagicMock, _ma: MagicMock
+    ) -> None:
         update = _make_callback_update(data="action:panic_confirm")
         result = await handle_callback(update, _make_context())
         assert result == NAVIGATING
@@ -444,7 +536,11 @@ class TestBinanceActions:
 
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers._is_authorized", return_value=True)
-    @patch("src.api.telegram._actions.asyncio.to_thread", new_callable=AsyncMock, side_effect=Exception("err"))
+    @patch(
+        "src.api.telegram._actions.asyncio.to_thread",
+        new_callable=AsyncMock,
+        side_effect=Exception("err"),
+    )
     async def test_panic_confirm_error(self, _mt: MagicMock, _ma: MagicMock) -> None:
         update = _make_callback_update(data="action:panic_confirm")
         result = await handle_callback(update, _make_context())
@@ -489,10 +585,15 @@ class TestBinanceActions:
 class TestReceiveAddSymbol:
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers.save_settings")
-    @patch("src.api.telegram.handlers.load_settings", return_value={
-        "futures": {"symbols": ["BTC_USDT"]},
-    })
-    async def test_adds_valid_symbol(self, _ms: MagicMock, mock_save: MagicMock) -> None:
+    @patch(
+        "src.api.telegram.handlers.load_settings",
+        return_value={
+            "futures": {"symbols": ["BTC_USDT"]},
+        },
+    )
+    async def test_adds_valid_symbol(
+        self, _ms: MagicMock, mock_save: MagicMock
+    ) -> None:
         update = _make_update()
         update.message.text = "DOT_USDT"
         result = await receive_add_symbol(update, _make_context())
@@ -508,9 +609,12 @@ class TestReceiveAddSymbol:
         assert result == WAITING_ADD_SYMBOL
 
     @pytest.mark.asyncio
-    @patch("src.api.telegram.handlers.load_settings", return_value={
-        "futures": {"symbols": ["BTC_USDT"]},
-    })
+    @patch(
+        "src.api.telegram.handlers.load_settings",
+        return_value={
+            "futures": {"symbols": ["BTC_USDT"]},
+        },
+    )
     async def test_rejects_duplicate(self, _ms: MagicMock) -> None:
         update = _make_update()
         update.message.text = "BTC_USDT"
@@ -521,10 +625,15 @@ class TestReceiveAddSymbol:
 class TestReceiveRemoveSymbol:
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers.save_settings")
-    @patch("src.api.telegram.handlers.load_settings", return_value={
-        "futures": {"symbols": ["BTC_USDT", "ETH_USDT"]},
-    })
-    async def test_removes_existing_symbol(self, _ms: MagicMock, mock_save: MagicMock) -> None:
+    @patch(
+        "src.api.telegram.handlers.load_settings",
+        return_value={
+            "futures": {"symbols": ["BTC_USDT", "ETH_USDT"]},
+        },
+    )
+    async def test_removes_existing_symbol(
+        self, _ms: MagicMock, mock_save: MagicMock
+    ) -> None:
         update = _make_update()
         update.message.text = "ETH_USDT"
         result = await receive_remove_symbol(update, _make_context())
@@ -533,9 +642,12 @@ class TestReceiveRemoveSymbol:
         assert "ETH_USDT" not in saved["futures"]["symbols"]
 
     @pytest.mark.asyncio
-    @patch("src.api.telegram.handlers.load_settings", return_value={
-        "futures": {"symbols": ["BTC_USDT"]},
-    })
+    @patch(
+        "src.api.telegram.handlers.load_settings",
+        return_value={
+            "futures": {"symbols": ["BTC_USDT"]},
+        },
+    )
     async def test_rejects_nonexistent_symbol(self, _ms: MagicMock) -> None:
         update = _make_update()
         update.message.text = "XYZ_USDT"
@@ -546,9 +658,12 @@ class TestReceiveRemoveSymbol:
 class TestReceiveLeverage:
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers.save_settings")
-    @patch("src.api.telegram.handlers.load_settings", return_value={
-        "futures": {"default_leverage": 5, "margin_type": "ISOLATED"},
-    })
+    @patch(
+        "src.api.telegram.handlers.load_settings",
+        return_value={
+            "futures": {"default_leverage": 5, "margin_type": "ISOLATED"},
+        },
+    )
     async def test_valid_leverage(self, _ms: MagicMock, mock_save: MagicMock) -> None:
         update = _make_update()
         update.message.text = "20"
@@ -574,10 +689,13 @@ class TestReceiveLeverage:
 class TestReceiveRisk:
     @pytest.mark.asyncio
     @patch("src.api.telegram.handlers.save_settings")
-    @patch("src.api.telegram.handlers.load_settings", return_value={
-        "global": {"risk_per_trade_pct": 1.0},
-        "futures": {"margin_type": "ISOLATED"},
-    })
+    @patch(
+        "src.api.telegram.handlers.load_settings",
+        return_value={
+            "global": {"risk_per_trade_pct": 1.0},
+            "futures": {"margin_type": "ISOLATED"},
+        },
+    )
     async def test_valid_risk(self, _ms: MagicMock, mock_save: MagicMock) -> None:
         update = _make_update()
         update.message.text = "2.5"

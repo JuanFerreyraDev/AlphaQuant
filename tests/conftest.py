@@ -49,7 +49,7 @@ def sample_model_dict() -> dict[str, Any]:
         "strategy_name": "TestStrategy",
     }
 
- 
+
 @pytest.fixture
 def mock_telegram_app() -> MagicMock:
     """Pre-configured mock of telegram.ext.Application."""

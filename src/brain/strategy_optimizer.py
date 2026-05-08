@@ -3,6 +3,7 @@
 Searches for the optimal combination of parameters (swing, ATR TP, ATR SL) and
 the best feature strategy for each symbol.
 """
+
 import argparse
 import datetime
 import itertools
@@ -28,9 +29,6 @@ from src.utils.helpers import (
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
 
-# ============================================================================
-#  OPTIMIZATION CONFIGURATION
-# ============================================================================
 ATR_TP_RANGE: list[float] = [1.5, 2.0, 2.5, 3.0]
 ATR_SL_RANGE: list[float] = [1.0, 1.5, 2.0]
 SWING_RANGE: list[int] = [5, 7, 10]
@@ -46,18 +44,13 @@ def optimize_strategy(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
     """
     logger.info("Starting optimization for %s...", symbol)
 
-    safe_symbol = (
-        symbol.replace("/", "_").replace(":", "_").split("_USDT")[0] + "_USDT"
-    )
+    safe_symbol = symbol.replace("/", "_").replace(":", "_").split("_USDT")[0] + "_USDT"
     filename = f"{safe_symbol}_1d.csv"
 
-    # 1. Load data and compute features
     try:
         df_raw = load_csv_data(filename)
     except FileNotFoundError:
-        raise RuntimeError(
-            f"File data/raw_csv/{filename} not found"
-        )
+        raise RuntimeError(f"File data/raw_csv/{filename} not found")
 
     compute_all_technicals(df_raw)
     fng_data = df_fg if df_fg is not None else pd.DataFrame()
@@ -95,37 +88,41 @@ def optimize_strategy(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
             X_test = df_test[valid_features]
 
             _, metrics, preds_test, _, opt_thresh = train_and_evaluate(
-                X_train, X_val, X_test, y_train, y_val, y_test,
-                tp_val=tp_m, sl_val=sl_m,
+                X_train,
+                X_val,
+                X_test,
+                y_train,
+                y_val,
+                y_test,
+                tp_val=tp_m,
+                sl_val=sl_m,
             )
 
             recent_signals = int(((preds_test == 1) & recent_mask.values).sum())
 
-            all_results.append({
-                "symbol": symbol,
-                "strategy_name": name,
-                "features": valid_features,
-                "optimal_threshold": float(opt_thresh),
-                "atr_tp_multi": float(tp_m),
-                "atr_sl_multi": float(sl_m),
-                "swing_period": int(sw),
-                "profit_neto": metrics["Profit_Neto"],
-                "recent_signals": recent_signals,
-            })
+            all_results.append(
+                {
+                    "symbol": symbol,
+                    "strategy_name": name,
+                    "features": valid_features,
+                    "optimal_threshold": float(opt_thresh),
+                    "atr_tp_multi": float(tp_m),
+                    "atr_sl_multi": float(sl_m),
+                    "swing_period": int(sw),
+                    "profit_neto": metrics["Profit_Neto"],
+                    "recent_signals": recent_signals,
+                }
+            )
 
     if not all_results:
-        raise RuntimeError(
-            f"No satisfactory results found for {symbol}."
-        )
+        raise RuntimeError(f"No satisfactory results found for {symbol}.")
 
-    # 2. Select the best configuration
     best_config = sorted(
         all_results,
         key=lambda x: (x["profit_neto"], x["recent_signals"]),
         reverse=True,
     )[0]
 
-    # 3. Export to JSON
     base_dir = get_project_root()
     output_dir = base_dir / "data" / "models" / safe_symbol
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -155,9 +152,7 @@ def optimize_strategy(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Strategy optimizer for Trading Bot."
-    )
+    parser = argparse.ArgumentParser(description="Strategy optimizer for Trading Bot.")
     parser.add_argument(
         "symbol",
         type=str,
@@ -175,9 +170,7 @@ if __name__ == "__main__":
     else:
         symbols = get_active_symbols()
         if not symbols:
-            logger.error(
-                "No symbol found in arguments or settings.yaml."
-            )
+            logger.error("No symbol found in arguments or settings.yaml.")
         else:
             logger.info("Batch Mode: Optimizing %d assets...", len(symbols))
             for s in symbols:

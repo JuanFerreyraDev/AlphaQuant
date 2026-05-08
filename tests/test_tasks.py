@@ -19,7 +19,6 @@ from src.engine.tasks import (
 )
 
 
-
 class TestSanitizeSymbol:
     def test_converts_slash_format(self) -> None:
         assert _sanitize_symbol("BTC/USDT") == "BTC_USDT"
@@ -82,22 +81,26 @@ class TestDailyMarketEvaluation:
 
     @pytest.mark.asyncio
     @patch("src.engine.tasks._evaluate_model", new_callable=AsyncMock, return_value=1)
-    @patch("src.engine.tasks.glob.glob", return_value=["/data/models/BTC_USDT/model.pkl"])
+    @patch(
+        "src.engine.tasks.glob.glob", return_value=["/data/models/BTC_USDT/model.pkl"]
+    )
     @patch("src.engine.tasks.os.path.isdir", return_value=True)
     @patch("src.engine.tasks.os.path.exists", return_value=True)
     @patch("src.engine.tasks.get_fear_and_greed", return_value=pd.DataFrame())
     @patch("src.engine.tasks._init_executor", return_value=None)
     @patch("src.engine.tasks.get_active_symbols", return_value=["BTC_USDT"])
     @patch("src.engine.tasks.get_active_market", return_value="futures")
-    async def test_processes_all_symbols_and_models(
-        self, *mocks: MagicMock
-    ) -> None:
+    async def test_processes_all_symbols_and_models(self, *mocks: MagicMock) -> None:
         """Processes each model found for every symbol."""
         mock_exchange = MagicMock()
         mock_exchange.close = AsyncMock()
         with (
-            patch("src.engine.tasks.asyncio.to_thread", new_callable=AsyncMock) as mock_thread,
-            patch("src.engine.tasks.ccxt_async.binanceusdm", return_value=mock_exchange),
+            patch(
+                "src.engine.tasks.asyncio.to_thread", new_callable=AsyncMock
+            ) as mock_thread,
+            patch(
+                "src.engine.tasks.ccxt_async.binanceusdm", return_value=mock_exchange
+            ),
         ):
             mock_thread.side_effect = [None, pd.DataFrame()]
             result = await daily_market_evaluation(MagicMock(), 123)
@@ -106,8 +109,14 @@ class TestDailyMarketEvaluation:
         mock_exchange.close.assert_awaited_once()
 
     @pytest.mark.asyncio
-    @patch("src.engine.tasks._evaluate_model", new_callable=AsyncMock, side_effect=RuntimeError("boom"))
-    @patch("src.engine.tasks.glob.glob", return_value=["/data/models/BTC_USDT/model.pkl"])
+    @patch(
+        "src.engine.tasks._evaluate_model",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("boom"),
+    )
+    @patch(
+        "src.engine.tasks.glob.glob", return_value=["/data/models/BTC_USDT/model.pkl"]
+    )
     @patch("src.engine.tasks.os.path.isdir", return_value=True)
     @patch("src.engine.tasks.os.path.exists", return_value=True)
     @patch("src.engine.tasks.get_fear_and_greed", return_value=pd.DataFrame())
@@ -119,8 +128,12 @@ class TestDailyMarketEvaluation:
         mock_exchange = MagicMock()
         mock_exchange.close = AsyncMock()
         with (
-            patch("src.engine.tasks.asyncio.to_thread", new_callable=AsyncMock) as mock_thread,
-            patch("src.engine.tasks.ccxt_async.binanceusdm", return_value=mock_exchange),
+            patch(
+                "src.engine.tasks.asyncio.to_thread", new_callable=AsyncMock
+            ) as mock_thread,
+            patch(
+                "src.engine.tasks.ccxt_async.binanceusdm", return_value=mock_exchange
+            ),
         ):
             mock_thread.side_effect = [None, pd.DataFrame()]
 
@@ -171,15 +184,25 @@ class TestEvaluateModel:
         mock_load.return_value = {"model": MagicMock()}
 
         result = await _evaluate_model(
-            MagicMock(), 123, None, "futures", "BTC_USDT",
-            "/path/model.pkl", "model.pkl", pd.DataFrame(),
+            MagicMock(),
+            123,
+            None,
+            "futures",
+            "BTC_USDT",
+            "/path/model.pkl",
+            "model.pkl",
+            pd.DataFrame(),
         )
 
         assert result == 0
 
     @pytest.mark.asyncio
     @patch("src.engine.tasks.asyncio.to_thread", new_callable=AsyncMock)
-    @patch("src.engine.tasks.fetch_ohlcv_binance", new_callable=AsyncMock, return_value=None)
+    @patch(
+        "src.engine.tasks.fetch_ohlcv_binance",
+        new_callable=AsyncMock,
+        return_value=None,
+    )
     @patch("src.engine.tasks.joblib.load")
     async def test_returns_zero_when_ohlcv_data_is_none(
         self, mock_load: MagicMock, _mock_fetch: MagicMock, _mock_thread: MagicMock
@@ -188,8 +211,14 @@ class TestEvaluateModel:
         mock_load.return_value = _make_model_dict()
 
         result = await _evaluate_model(
-            MagicMock(), 123, None, "futures", "BTC_USDT",
-            "/path/model.pkl", "model.pkl", pd.DataFrame(),
+            MagicMock(),
+            123,
+            None,
+            "futures",
+            "BTC_USDT",
+            "/path/model.pkl",
+            "model.pkl",
+            pd.DataFrame(),
         )
 
         assert result == 0
@@ -212,8 +241,14 @@ class TestEvaluateModel:
         mock_thread.return_value = _make_ohlcv_df()
 
         result = await _evaluate_model(
-            MagicMock(), 123, None, "futures", "BTC_USDT",
-            "/path/model.pkl", "model.pkl", pd.DataFrame(),
+            MagicMock(),
+            123,
+            None,
+            "futures",
+            "BTC_USDT",
+            "/path/model.pkl",
+            "model.pkl",
+            pd.DataFrame(),
         )
 
         assert result == 0
@@ -238,8 +273,14 @@ class TestEvaluateModel:
         mock_thread.return_value = df
 
         result = await _evaluate_model(
-            MagicMock(), 123, None, "spot", "BTC_USDT",
-            "/path/model.pkl", "model.pkl", pd.DataFrame(),
+            MagicMock(),
+            123,
+            None,
+            "spot",
+            "BTC_USDT",
+            "/path/model.pkl",
+            "model.pkl",
+            pd.DataFrame(),
         )
 
         assert result == 1
@@ -267,8 +308,14 @@ class TestEvaluateModel:
         mock_executor = MagicMock()
 
         result = await _evaluate_model(
-            MagicMock(), 123, mock_executor, "futures", "BTC_USDT",
-            "/path/model.pkl", "model.pkl", pd.DataFrame(),
+            MagicMock(),
+            123,
+            mock_executor,
+            "futures",
+            "BTC_USDT",
+            "/path/model.pkl",
+            "model.pkl",
+            pd.DataFrame(),
         )
 
         assert result == 1
@@ -295,8 +342,14 @@ class TestEvaluateModel:
         mock_thread.return_value = df
 
         await _evaluate_model(
-            MagicMock(), 123, None, "futures", "BTC_USDT",
-            "/path/model.pkl", "model.pkl", pd.DataFrame(),
+            MagicMock(),
+            123,
+            None,
+            "futures",
+            "BTC_USDT",
+            "/path/model.pkl",
+            "model.pkl",
+            pd.DataFrame(),
         )
 
         mock_exec_notify.assert_not_awaited()
@@ -320,8 +373,14 @@ class TestEvaluateModel:
         mock_thread.return_value = df
 
         result = await _evaluate_model(
-            MagicMock(), 123, None, "futures", "BTC_USDT",
-            "/path/model.pkl", "model.pkl", pd.DataFrame(),
+            MagicMock(),
+            123,
+            None,
+            "futures",
+            "BTC_USDT",
+            "/path/model.pkl",
+            "model.pkl",
+            pd.DataFrame(),
         )
 
         assert result == 0
@@ -340,9 +399,13 @@ class TestExecuteAndNotify:
             "take_profit": {"clientAlgoId": "TP1"},
         }
 
-        with patch("src.engine.tasks.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+        with patch(
+            "src.engine.tasks.asyncio.to_thread", new_callable=AsyncMock
+        ) as mock_thread:
             mock_thread.return_value = mock_executor.execute_futures_trade.return_value
-            await _execute_and_notify(mock_telegram_app, 123, mock_executor, "BTC_USDT", 58000.0, 65000.0)
+            await _execute_and_notify(
+                mock_telegram_app, 123, mock_executor, "BTC_USDT", 58000.0, 65000.0
+            )
 
         mock_telegram_app.bot.send_message.assert_awaited_once()
         text = mock_telegram_app.bot.send_message.call_args[1]["text"]
@@ -355,9 +418,13 @@ class TestExecuteAndNotify:
         """Trade returning None sends a warning message."""
         mock_executor = MagicMock()
 
-        with patch("src.engine.tasks.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+        with patch(
+            "src.engine.tasks.asyncio.to_thread", new_callable=AsyncMock
+        ) as mock_thread:
             mock_thread.return_value = None
-            await _execute_and_notify(mock_telegram_app, 123, mock_executor, "BTC_USDT", 58000.0, 65000.0)
+            await _execute_and_notify(
+                mock_telegram_app, 123, mock_executor, "BTC_USDT", 58000.0, 65000.0
+            )
 
         mock_telegram_app.bot.send_message.assert_awaited_once()
         text = mock_telegram_app.bot.send_message.call_args[1]["text"]
@@ -370,9 +437,13 @@ class TestExecuteAndNotify:
         """Execution error sends an alert."""
         mock_executor = MagicMock()
 
-        with patch("src.engine.tasks.asyncio.to_thread", new_callable=AsyncMock) as mock_thread:
+        with patch(
+            "src.engine.tasks.asyncio.to_thread", new_callable=AsyncMock
+        ) as mock_thread:
             mock_thread.side_effect = ConnectionError("network down")
-            await _execute_and_notify(mock_telegram_app, 123, mock_executor, "BTC_USDT", 58000.0, 65000.0)
+            await _execute_and_notify(
+                mock_telegram_app, 123, mock_executor, "BTC_USDT", 58000.0, 65000.0
+            )
 
         mock_telegram_app.bot.send_message.assert_awaited_once()
         text = mock_telegram_app.bot.send_message.call_args[1]["text"]
@@ -382,7 +453,9 @@ class TestExecuteAndNotify:
 class TestCheckTrainingFreshness:
     @patch("src.engine.tasks.get_project_root")
     def test_needs_training_when_config_missing(
-        self, mock_root: MagicMock, tmp_path,
+        self,
+        mock_root: MagicMock,
+        tmp_path,
     ) -> None:
         """Without config.json, indicates training is needed."""
         mock_root.return_value = tmp_path
@@ -392,22 +465,28 @@ class TestCheckTrainingFreshness:
 
     @patch("src.engine.tasks.get_project_root")
     def test_needs_training_when_no_last_trained_field(
-        self, mock_root: MagicMock, tmp_path,
+        self,
+        mock_root: MagicMock,
+        tmp_path,
     ) -> None:
         """Config without last_trained field indicates training is needed."""
         mock_root.return_value = tmp_path
         config_dir = tmp_path / "data" / "models" / "BTC_USDT"
         config_dir.mkdir(parents=True)
         import json
+
         (config_dir / "config.json").write_text(
-            json.dumps({"symbol": "BTC_USDT"}), encoding="utf-8",
+            json.dumps({"symbol": "BTC_USDT"}),
+            encoding="utf-8",
         )
         needs, reason = _check_training_freshness("BTC_USDT")
         assert needs is True
 
     @patch("src.engine.tasks.get_project_root")
     def test_skips_when_recently_trained(
-        self, mock_root: MagicMock, tmp_path,
+        self,
+        mock_root: MagicMock,
+        tmp_path,
     ) -> None:
         """Trained less than 14 days ago indicates NO training needed."""
         import datetime
@@ -416,9 +495,12 @@ class TestCheckTrainingFreshness:
         mock_root.return_value = tmp_path
         config_dir = tmp_path / "data" / "models" / "BTC_USDT"
         config_dir.mkdir(parents=True)
-        recent = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=5)
+        recent = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            days=5
+        )
         (config_dir / "config.json").write_text(
-            json.dumps({"last_trained": recent.isoformat()}), encoding="utf-8",
+            json.dumps({"last_trained": recent.isoformat()}),
+            encoding="utf-8",
         )
         needs, reason = _check_training_freshness("BTC_USDT")
         assert needs is False
@@ -426,7 +508,9 @@ class TestCheckTrainingFreshness:
 
     @patch("src.engine.tasks.get_project_root")
     def test_needs_training_when_cooldown_expired(
-        self, mock_root: MagicMock, tmp_path,
+        self,
+        mock_root: MagicMock,
+        tmp_path,
     ) -> None:
         """Trained more than 14 days ago indicates training IS needed."""
         import datetime
@@ -437,7 +521,8 @@ class TestCheckTrainingFreshness:
         config_dir.mkdir(parents=True)
         old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=20)
         (config_dir / "config.json").write_text(
-            json.dumps({"last_trained": old.isoformat()}), encoding="utf-8",
+            json.dumps({"last_trained": old.isoformat()}),
+            encoding="utf-8",
         )
         needs, reason = _check_training_freshness("BTC_USDT")
         assert needs is True
@@ -470,16 +555,24 @@ class TestRunFullTrainingPipeline:
         assert safe_symbol == "BTC_USDT"
         assert reason == ""
 
-    @patch("src.engine.tasks.fetch_historical_data", side_effect=RuntimeError("download failed"))
+    @patch(
+        "src.engine.tasks.fetch_historical_data",
+        side_effect=RuntimeError("download failed"),
+    )
     @patch("src.engine.tasks._check_training_freshness", return_value=(True, ""))
     def test_propagates_fetch_error(
-        self, _mock_freshness: MagicMock, _mock: MagicMock,
+        self,
+        _mock_freshness: MagicMock,
+        _mock: MagicMock,
     ) -> None:
         """Error en fetch_historical_data se propaga como RuntimeError."""
         with pytest.raises(RuntimeError, match="download failed"):
             run_full_training_pipeline("BTC_USDT")
 
-    @patch("src.engine.tasks.optimize_strategy", side_effect=RuntimeError("optimization failed"))
+    @patch(
+        "src.engine.tasks.optimize_strategy",
+        side_effect=RuntimeError("optimization failed"),
+    )
     @patch("src.engine.tasks.get_fear_and_greed", return_value=pd.DataFrame())
     @patch("src.engine.tasks.fetch_historical_data")
     @patch("src.engine.tasks._check_training_freshness", return_value=(True, ""))
@@ -494,7 +587,9 @@ class TestRunFullTrainingPipeline:
         with pytest.raises(RuntimeError, match="optimization failed"):
             run_full_training_pipeline("BTC_USDT")
 
-    @patch("src.engine.tasks.train_factory", side_effect=RuntimeError("training failed"))
+    @patch(
+        "src.engine.tasks.train_factory", side_effect=RuntimeError("training failed")
+    )
     @patch("src.engine.tasks.optimize_strategy")
     @patch("src.engine.tasks.get_fear_and_greed", return_value=pd.DataFrame())
     @patch("src.engine.tasks.fetch_historical_data")
@@ -514,7 +609,10 @@ class TestRunFullTrainingPipeline:
     @patch("src.engine.tasks.train_factory")
     @patch("src.engine.tasks.optimize_strategy")
     @patch("src.engine.tasks.fetch_historical_data")
-    @patch("src.engine.tasks._check_training_freshness", return_value=(False, "Trained 3 day(s) ago, less than 14 days"))
+    @patch(
+        "src.engine.tasks._check_training_freshness",
+        return_value=(False, "Trained 3 day(s) ago, less than 14 days"),
+    )
     def test_skips_when_recently_trained(
         self,
         _mock_freshness: MagicMock,

@@ -63,6 +63,7 @@ _SYMBOL_RE = re.compile(r"^[A-Z0-9]+_USDT$")
 
 # --- Authentication ---
 
+
 def _check_credentials() -> tuple[bool, Optional[int]]:
     """Verify that AUTHORIZED_CHAT_ID, BINANCE_API_KEY, and
     BINANCE_API_SECRET are present in the environment.
@@ -101,12 +102,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return ConversationHandler.END
 
     await update.message.reply_text(
-        _txt_main(), reply_markup=_kb_main(), parse_mode="HTML",
+        _txt_main(),
+        reply_markup=_kb_main(),
+        parse_mode="HTML",
     )
     return NAVIGATING
 
 
 # --- Callback-query router  (NAVIGATING state) ---
+
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -126,26 +130,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Navigation
     if data == "menu:main":
         await query.edit_message_text(
-            _txt_main(), reply_markup=_kb_main(), parse_mode="HTML",
+            _txt_main(),
+            reply_markup=_kb_main(),
+            parse_mode="HTML",
         )
         return NAVIGATING
 
     if data == "menu:bot":
         paused = context.application.bot_data.get("paused", False)
         await query.edit_message_text(
-            _txt_bot(), reply_markup=_kb_bot(paused), parse_mode="HTML",
+            _txt_bot(),
+            reply_markup=_kb_bot(paused),
+            parse_mode="HTML",
         )
         return NAVIGATING
 
     if data == "menu:exchange":
         await query.edit_message_text(
-            _txt_exchange(), reply_markup=_kb_exchange(), parse_mode="HTML",
+            _txt_exchange(),
+            reply_markup=_kb_exchange(),
+            parse_mode="HTML",
         )
         return NAVIGATING
 
     if data == "menu:futures":
         await query.edit_message_text(
-            _txt_futures(), reply_markup=_kb_futures(_current_margin()),
+            _txt_futures(),
+            reply_markup=_kb_futures(_current_margin()),
             parse_mode="HTML",
         )
         return NAVIGATING
@@ -184,7 +195,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.application.bot_data["paused"] = True
         await query.edit_message_text(
             "⏸️ <b>Bot PAUSED</b>\n\nAutomatic operations will not be executed.",
-            reply_markup=_kb_bot(True), parse_mode="HTML",
+            reply_markup=_kb_bot(True),
+            parse_mode="HTML",
         )
         return NAVIGATING
 
@@ -192,11 +204,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         context.application.bot_data["paused"] = False
         await query.edit_message_text(
             "▶️ <b>Bot RESUMED</b>\n\nAutomatic operations activated.",
-            reply_markup=_kb_bot(False), parse_mode="HTML",
+            reply_markup=_kb_bot(False),
+            parse_mode="HTML",
         )
         return NAVIGATING
 
-    # Futures actions 
+    # Futures actions
     if data == "action:balance":
         return await _on_balance(query, context)
 
@@ -236,7 +249,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "⚠️ <b>PANIC BUTTON</b>\n\n"
             "This will close <b>ALL</b> open positions and cancel "
             "<b>ALL</b> orders.\n\nAre you sure?",
-            reply_markup=_kb_panic_confirm(), parse_mode="HTML",
+            reply_markup=_kb_panic_confirm(),
+            parse_mode="HTML",
         )
         return NAVIGATING
 
@@ -245,7 +259,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "action:panic_cancel":
         await query.edit_message_text(
-            _txt_futures(), reply_markup=_kb_futures(_current_margin()),
+            _txt_futures(),
+            reply_markup=_kb_futures(_current_margin()),
             parse_mode="HTML",
         )
         return NAVIGATING
@@ -254,6 +269,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 # --- Text-input receivers  (ConversationHandler states) ---
+
 
 async def receive_add_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text.strip().upper()
@@ -284,12 +300,15 @@ async def receive_add_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE)
     paused = context.application.bot_data.get("paused", False)
     await update.message.reply_text(
         f"✅ <code>{text}</code> added successfully.",
-        reply_markup=_kb_bot(paused), parse_mode="HTML",
+        reply_markup=_kb_bot(paused),
+        parse_mode="HTML",
     )
     return NAVIGATING
 
 
-async def receive_remove_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def receive_remove_symbol(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     text = update.message.text.strip().upper()
     settings = load_settings()
     symbols: list[str] = settings.get("futures", {}).get("symbols", [])
@@ -309,7 +328,8 @@ async def receive_remove_symbol(update: Update, context: ContextTypes.DEFAULT_TY
     paused = context.application.bot_data.get("paused", False)
     await update.message.reply_text(
         f"✅ <code>{text}</code> removed successfully.",
-        reply_markup=_kb_bot(paused), parse_mode="HTML",
+        reply_markup=_kb_bot(paused),
+        parse_mode="HTML",
     )
     return NAVIGATING
 
@@ -338,7 +358,8 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     margin = settings.get("futures", {}).get("margin_type", "ISOLATED")
     await update.message.reply_text(
         f"✅ Leverage updated to <b>{value}x</b>",
-        reply_markup=_kb_futures(margin), parse_mode="HTML",
+        reply_markup=_kb_futures(margin),
+        parse_mode="HTML",
     )
     return NAVIGATING
 
@@ -350,8 +371,7 @@ async def receive_risk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         value = float(text)
     except ValueError:
         await update.message.reply_text(
-            "❌ Must be a decimal number. Example: 1.5\n"
-            "Try again or type /cancel.",
+            "❌ Must be a decimal number. Example: 1.5\n" "Try again or type /cancel.",
         )
         return WAITING_RISK
 
@@ -368,30 +388,36 @@ async def receive_risk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     margin = settings.get("futures", {}).get("margin_type", "ISOLATED")
     await update.message.reply_text(
         f"✅ Risk updated to <b>{value}%</b>",
-        reply_markup=_kb_futures(margin), parse_mode="HTML",
+        reply_markup=_kb_futures(margin),
+        parse_mode="HTML",
     )
     return NAVIGATING
 
 
 # /cancel helpers (CommandHandlers in each state)
 
+
 async def _cancel_to_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     paused = context.application.bot_data.get("paused", False)
     await update.message.reply_text(
-        _txt_bot(), reply_markup=_kb_bot(paused), parse_mode="HTML",
+        _txt_bot(),
+        reply_markup=_kb_bot(paused),
+        parse_mode="HTML",
     )
     return NAVIGATING
 
 
 async def _cancel_to_futures(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text(
-        _txt_futures(), reply_markup=_kb_futures(_current_margin()),
+        _txt_futures(),
+        reply_markup=_kb_futures(_current_margin()),
         parse_mode="HTML",
     )
     return NAVIGATING
 
 
 # --- ConversationHandler factory ---
+
 
 def build_conversation_handler() -> ConversationHandler:
     """Build and return the main ``ConversationHandler`` for the bot."""

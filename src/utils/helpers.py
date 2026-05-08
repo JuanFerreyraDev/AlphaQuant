@@ -100,9 +100,15 @@ def cleanup_columns(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame without auxiliary columns and without NaN rows.
     """
     cols_to_drop = [
-        "open", "high", "low", "close", "volume",
-        "ema_50", "vol_sma_20",
-        "max_high_future", "min_low_future",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "ema_50",
+        "vol_sma_20",
+        "max_high_future",
+        "min_low_future",
     ]
     df.drop(columns=[c for c in cols_to_drop if c in df.columns], inplace=True)
     df.dropna(inplace=True)
@@ -253,9 +259,7 @@ def train_and_evaluate(
     """
     hp = hyperparams or DEFAULT_HP
 
-    imbalance = (
-        sum(y_train == 0) / sum(y_train == 1) if sum(y_train == 1) > 0 else 1
-    )
+    imbalance = sum(y_train == 0) / sum(y_train == 1) if sum(y_train == 1) > 0 else 1
 
     model = xgb.XGBClassifier(
         n_estimators=hp["n_estimators"],
@@ -267,12 +271,10 @@ def train_and_evaluate(
     )
     model.fit(X_train, y_train)
 
-    # 1. Optimize Threshold on Validation
     best_threshold, val_profit = find_optimal_threshold(
         model, X_val, y_val, tp_val, sl_val
     )
 
-    # 2. Leaderboard Metrics on Validation
     y_probs_val: np.ndarray = model.predict_proba(X_val)[:, 1]
     preds_val = (y_probs_val >= best_threshold).astype(int)
 
@@ -294,7 +296,6 @@ def train_and_evaluate(
         "Umbral_Opt": round(best_threshold, 3),
     }
 
-    # 3. Test Data
     y_probs_test: np.ndarray = model.predict_proba(X_test)[:, 1]
     preds_test = (y_probs_test >= best_threshold).astype(int)
 

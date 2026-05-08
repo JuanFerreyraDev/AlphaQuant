@@ -17,7 +17,13 @@ class TestSendTradeSignal:
     async def test_sends_html_formatted_message(self, mock_telegram_app) -> None:
         """Sends message with parse_mode='HTML'."""
         app = mock_telegram_app
-        signal = {"symbol": "BTC/USDT", "strategy": "Momentum", "price": 60000.0, "tp": 65000.0, "sl": 58000.0}
+        signal = {
+            "symbol": "BTC/USDT",
+            "strategy": "Momentum",
+            "price": 60000.0,
+            "tp": 65000.0,
+            "sl": 58000.0,
+        }
 
         await send_trade_signal(app, 123, signal)
 
@@ -54,8 +60,16 @@ class TestSendTradeSignal:
     async def test_handles_telegram_error_gracefully(self, mock_telegram_app) -> None:
         """TelegramError does not propagate."""
         app = mock_telegram_app
-        app.bot.send_message = AsyncMock(side_effect=telegram.error.TelegramError("blocked"))
-        signal = {"symbol": "BTC/USDT", "strategy": "Test", "price": 100.0, "tp": 110.0, "sl": 90.0}
+        app.bot.send_message = AsyncMock(
+            side_effect=telegram.error.TelegramError("blocked")
+        )
+        signal = {
+            "symbol": "BTC/USDT",
+            "strategy": "Test",
+            "price": 100.0,
+            "tp": 110.0,
+            "sl": 90.0,
+        }
 
         await send_trade_signal(app, 123, signal)
 
@@ -63,8 +77,16 @@ class TestSendTradeSignal:
     async def test_handles_network_error_gracefully(self, mock_telegram_app) -> None:
         """NetworkError does not propagate."""
         app = mock_telegram_app
-        app.bot.send_message = AsyncMock(side_effect=telegram.error.NetworkError("timeout"))
-        signal = {"symbol": "BTC/USDT", "strategy": "Test", "price": 100.0, "tp": 110.0, "sl": 90.0}
+        app.bot.send_message = AsyncMock(
+            side_effect=telegram.error.NetworkError("timeout")
+        )
+        signal = {
+            "symbol": "BTC/USDT",
+            "strategy": "Test",
+            "price": 100.0,
+            "tp": 110.0,
+            "sl": 90.0,
+        }
 
         await send_trade_signal(app, 123, signal)
 
@@ -93,7 +115,9 @@ class TestSendExecutionResult:
         assert "BTC/USDT" in text
 
     @pytest.mark.asyncio
-    async def test_sends_skipped_message_when_result_is_none(self, mock_telegram_app) -> None:
+    async def test_sends_skipped_message_when_result_is_none(
+        self, mock_telegram_app
+    ) -> None:
         """None result (skipped trade) produces a 'no executed' warning message."""
         app = mock_telegram_app
 
@@ -104,7 +128,9 @@ class TestSendExecutionResult:
         assert "ETH/USDT" in text
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_na_when_order_keys_missing(self, mock_telegram_app) -> None:
+    async def test_falls_back_to_na_when_order_keys_missing(
+        self, mock_telegram_app
+    ) -> None:
         """Missing orderId / clientAlgoId keys default to 'N/A'."""
         app = mock_telegram_app
         result = {"entry": {}, "stop_loss": None, "take_profit": None}
@@ -129,18 +155,24 @@ class TestSendExecutionResult:
     async def test_handles_telegram_error_gracefully(self, mock_telegram_app) -> None:
         """TelegramError does not propagate."""
         app = mock_telegram_app
-        app.bot.send_message = AsyncMock(side_effect=telegram.error.TelegramError("blocked"))
+        app.bot.send_message = AsyncMock(
+            side_effect=telegram.error.TelegramError("blocked")
+        )
 
         await send_execution_result(app, 123, None, "BTC_USDT")
 
 
 class TestSendExecutionError:
     @pytest.mark.asyncio
-    async def test_sends_error_message_with_symbol_and_exception(self, mock_telegram_app) -> None:
+    async def test_sends_error_message_with_symbol_and_exception(
+        self, mock_telegram_app
+    ) -> None:
         """Message contains the symbol and the exception text, with parse_mode HTML."""
         app = mock_telegram_app
 
-        await send_execution_error(app, 123, "BTC_USDT", ValueError("insufficient balance"))
+        await send_execution_error(
+            app, 123, "BTC_USDT", ValueError("insufficient balance")
+        )
 
         app.bot.send_message.assert_awaited_once()
         call_kwargs = app.bot.send_message.call_args[1]
@@ -176,6 +208,8 @@ class TestSendExecutionError:
     async def test_handles_telegram_error_gracefully(self, mock_telegram_app) -> None:
         """TelegramError does not propagate."""
         app = mock_telegram_app
-        app.bot.send_message = AsyncMock(side_effect=telegram.error.TelegramError("blocked"))
+        app.bot.send_message = AsyncMock(
+            side_effect=telegram.error.TelegramError("blocked")
+        )
 
         await send_execution_error(app, 123, "BTC_USDT", Exception("err"))

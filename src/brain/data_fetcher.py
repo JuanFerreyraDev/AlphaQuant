@@ -42,7 +42,6 @@ def fetch_historical_data(
     """
     active_market = get_active_market()
 
-    # 1. Initialize exchange and normalize symbol
     ccxt_symbol = symbol.replace("_", "/")
     if active_market == "futures":
         logger.info(
@@ -52,15 +51,12 @@ def fetch_historical_data(
         if ":" not in ccxt_symbol:
             ccxt_symbol = f"{ccxt_symbol}:USDT"
     else:
-        logger.info(
-            "Downloading %s with timeframe %s (Spot)...", symbol, timeframe
-        )
+        logger.info("Downloading %s with timeframe %s (Spot)...", symbol, timeframe)
         exchange = ccxt.binance({"enableRateLimit": True})
 
     since_milliseconds: int = exchange.parse8601(start_date)
     all_candles: list[list] = []
 
-    # 2. Loop to download in batches of 1000
     while True:
         candles: Optional[list[list]] = None
         for attempt in range(1, _MAX_RETRIES + 1):
@@ -73,7 +69,11 @@ def fetch_historical_data(
                 delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
                 logger.warning(
                     "Network error downloading %s (attempt %d/%d): %s. Retrying in %.0fs...",
-                    symbol, attempt, _MAX_RETRIES, exc, delay,
+                    symbol,
+                    attempt,
+                    _MAX_RETRIES,
+                    exc,
+                    delay,
                 )
                 time.sleep(delay)
             except ccxt.ExchangeError as exc:
@@ -101,29 +101,23 @@ def fetch_historical_data(
 
         time.sleep(1)
 
-    # 3. Convert to DataFrame
     df = pd.DataFrame(
         all_candles, columns=["timestamp", "open", "high", "low", "close", "volume"]
     )
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
     df.set_index("timestamp", inplace=True)
 
-    # 4. Save to data/raw_csv/
     base_dir = get_project_root()
     folder_path = base_dir / "data" / "raw_csv"
     folder_path.mkdir(parents=True, exist_ok=True)
 
-    safe_symbol = (
-        symbol.replace("/", "_").replace(":", "_").split("_USDT")[0] + "_USDT"
-    )
+    safe_symbol = symbol.replace("/", "_").replace(":", "_").split("_USDT")[0] + "_USDT"
     file_name = f"{safe_symbol}_{timeframe}.csv"
     full_path = folder_path / file_name
 
     df.to_csv(full_path)
 
-    logger.info(
-        "Saved %d days of history to: %s", len(df), full_path
-    )
+    logger.info("Saved %d days of history to: %s", len(df), full_path)
     return df
 
 
@@ -160,14 +154,20 @@ def get_fear_and_greed() -> pd.DataFrame:
             delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
             logger.warning(
                 "Fear & Greed connection error (attempt %d/%d): %s. Retrying in %.0fs...",
-                attempt, _MAX_RETRIES, exc, delay,
+                attempt,
+                _MAX_RETRIES,
+                exc,
+                delay,
             )
             time.sleep(delay)
         except requests.Timeout as exc:
             delay = _RETRY_BASE_DELAY * (2 ** (attempt - 1))
             logger.warning(
                 "Fear & Greed timeout (attempt %d/%d): %s. Retrying in %.0fs...",
-                attempt, _MAX_RETRIES, exc, delay,
+                attempt,
+                _MAX_RETRIES,
+                exc,
+                delay,
             )
             time.sleep(delay)
         except requests.HTTPError as exc:
@@ -177,9 +177,7 @@ def get_fear_and_greed() -> pd.DataFrame:
             logger.error("Error parsing Fear & Greed response: %s", exc)
             return pd.DataFrame()
 
-    logger.error(
-        "Could not download Fear & Greed after %d attempts.", _MAX_RETRIES
-    )
+    logger.error("Could not download Fear & Greed after %d attempts.", _MAX_RETRIES)
     return pd.DataFrame()
 
 
@@ -227,12 +225,17 @@ async def fetch_ohlcv_binance(
                 if attempt == _MAX_RETRIES:
                     logger.error(
                         "Error downloading data for %s after %d attempts: %s",
-                        symbol, _MAX_RETRIES, exc,
+                        symbol,
+                        _MAX_RETRIES,
+                        exc,
                     )
                     return None
                 logger.warning(
                     "Network error for %s (attempt %d/%d): %s",
-                    symbol, attempt, _MAX_RETRIES, exc,
+                    symbol,
+                    attempt,
+                    _MAX_RETRIES,
+                    exc,
                 )
             except ccxt.ExchangeError as exc:
                 logger.error("Exchange error for %s: %s", symbol, exc)

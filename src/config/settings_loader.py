@@ -12,7 +12,6 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-# Project root: AlphaQuant/
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
 
 
@@ -95,7 +94,9 @@ def save_settings(data: dict[str, Any]) -> None:
     filepath = _settings_path()
     try:
         with filepath.open("w", encoding="utf-8") as fh:
-            yaml.dump(data, fh, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            yaml.dump(
+                data, fh, default_flow_style=False, allow_unicode=True, sort_keys=False
+            )
         logger.info("settings.yaml saved successfully.")
     except OSError as exc:
         logger.error("Error writing settings.yaml: %s", exc)

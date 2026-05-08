@@ -32,11 +32,16 @@ def _build_executor(
         "BINANCE_API_SECRET": api_secret,
         "USE_TESTNET": use_testnet,
     }
-    with patch("src.api.binance.binance_executor.load_dotenv"), \
-         patch("src.api.binance.binance_executor.os.getenv", side_effect=lambda k, d="": env_vars.get(k, d)), \
-         patch("src.api.binance.binance_executor.Client") as mock_client_cls, \
-         patch("src.api.binance.binance_executor.get_market_config", return_value={"default_leverage": leverage}), \
-         patch("src.api.binance.binance_executor.load_settings", return_value={"global": {"risk_per_trade_pct": risk_per_trade_pct}}):
+    with patch("src.api.binance.binance_executor.load_dotenv"), patch(
+        "src.api.binance.binance_executor.os.getenv",
+        side_effect=lambda k, d="": env_vars.get(k, d),
+    ), patch("src.api.binance.binance_executor.Client") as mock_client_cls, patch(
+        "src.api.binance.binance_executor.get_market_config",
+        return_value={"default_leverage": leverage},
+    ), patch(
+        "src.api.binance.binance_executor.load_settings",
+        return_value={"global": {"risk_per_trade_pct": risk_per_trade_pct}},
+    ):
         mock_client_cls.return_value = MagicMock()
         executor = BinanceExecutor()
     return executor
@@ -45,19 +50,26 @@ def _build_executor(
 class TestBinanceExecutorInit:
     def test_raises_value_error_when_api_keys_missing(self) -> None:
         """Missing API keys raise ValueError."""
-        with patch("src.api.binance.binance_executor.load_dotenv"), \
-             patch("src.api.binance.binance_executor.os.getenv", return_value=""), \
-             pytest.raises(ValueError, match="BINANCE_API_KEY"):
+        with patch("src.api.binance.binance_executor.load_dotenv"), patch(
+            "src.api.binance.binance_executor.os.getenv", return_value=""
+        ), pytest.raises(ValueError, match="BINANCE_API_KEY"):
             BinanceExecutor()
 
     def test_connects_to_testnet_by_default(self) -> None:
         """USE_TESTNET='True' initializes Client with testnet=True."""
-        env_vars = {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s", "USE_TESTNET": "True"}
+        env_vars = {
+            "BINANCE_API_KEY": "k",
+            "BINANCE_API_SECRET": "s",
+            "USE_TESTNET": "True",
+        }
 
-        with patch("src.api.binance.binance_executor.load_dotenv"), \
-             patch("src.api.binance.binance_executor.os.getenv", side_effect=lambda k, d="": env_vars.get(k, d)), \
-             patch("src.api.binance.binance_executor.Client") as mock_cls, \
-             patch("src.api.binance.binance_executor.get_market_config", return_value={"default_leverage": 5}):
+        with patch("src.api.binance.binance_executor.load_dotenv"), patch(
+            "src.api.binance.binance_executor.os.getenv",
+            side_effect=lambda k, d="": env_vars.get(k, d),
+        ), patch("src.api.binance.binance_executor.Client") as mock_cls, patch(
+            "src.api.binance.binance_executor.get_market_config",
+            return_value={"default_leverage": 5},
+        ):
             mock_cls.return_value = MagicMock()
             executor = BinanceExecutor()
 
@@ -65,12 +77,19 @@ class TestBinanceExecutorInit:
 
     def test_connects_to_mainnet_when_testnet_disabled(self) -> None:
         """USE_TESTNET='false' initializes Client with testnet=False."""
-        env_vars = {"BINANCE_API_KEY": "k", "BINANCE_API_SECRET": "s", "USE_TESTNET": "false"}
+        env_vars = {
+            "BINANCE_API_KEY": "k",
+            "BINANCE_API_SECRET": "s",
+            "USE_TESTNET": "false",
+        }
 
-        with patch("src.api.binance.binance_executor.load_dotenv"), \
-             patch("src.api.binance.binance_executor.os.getenv", side_effect=lambda k, d="": env_vars.get(k, d)), \
-             patch("src.api.binance.binance_executor.Client") as mock_cls, \
-             patch("src.api.binance.binance_executor.get_market_config", return_value={"default_leverage": 3}):
+        with patch("src.api.binance.binance_executor.load_dotenv"), patch(
+            "src.api.binance.binance_executor.os.getenv",
+            side_effect=lambda k, d="": env_vars.get(k, d),
+        ), patch("src.api.binance.binance_executor.Client") as mock_cls, patch(
+            "src.api.binance.binance_executor.get_market_config",
+            return_value={"default_leverage": 3},
+        ):
             mock_cls.return_value = MagicMock()
             BinanceExecutor()
 
@@ -241,7 +260,11 @@ class TestCalculateQuantity:
                 {
                     "symbol": "BTCUSDT",
                     "filters": [
-                        {"filterType": "LOT_SIZE", "stepSize": "0.001", "minQty": "0.001"},
+                        {
+                            "filterType": "LOT_SIZE",
+                            "stepSize": "0.001",
+                            "minQty": "0.001",
+                        },
                         {"filterType": "MIN_NOTIONAL", "notional": "5.0"},
                         {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
                     ],
@@ -345,7 +368,9 @@ class TestPlaceAlgoOrder:
         executor.client._request_futures_api = MagicMock(
             return_value={"clientAlgoId": "abc"}
         )
-        result = executor._place_algo_order("BTCUSDT", "SELL", "TAKE_PROFIT", "65000.00")
+        result = executor._place_algo_order(
+            "BTCUSDT", "SELL", "TAKE_PROFIT", "65000.00"
+        )
 
         assert result is not None
 
@@ -376,10 +401,14 @@ class TestExecuteFuturesTrade:
         executor._has_open_position = MagicMock(return_value=False)
         executor._configure_symbol = MagicMock(return_value=True)
         executor._calculate_quantity = MagicMock(return_value=0.01)
-        executor._get_symbol_filters = MagicMock(return_value={
-            "step_size": "0.001", "min_qty": "0.001",
-            "min_notional": 5.0, "tick_size": "0.01",
-        })
+        executor._get_symbol_filters = MagicMock(
+            return_value={
+                "step_size": "0.001",
+                "min_qty": "0.001",
+                "min_notional": 5.0,
+                "tick_size": "0.01",
+            }
+        )
         executor.client.futures_create_order.return_value = {"orderId": "E1"}
         executor._place_algo_order = MagicMock(
             side_effect=[{"orderId": "SL1"}, {"orderId": "TP1"}]
@@ -429,10 +458,14 @@ class TestExecuteFuturesTrade:
         executor._has_open_position = MagicMock(return_value=False)
         executor._configure_symbol = MagicMock(return_value=True)
         executor._calculate_quantity = MagicMock(return_value=0.01)
-        executor._get_symbol_filters = MagicMock(return_value={
-            "step_size": "0.001", "min_qty": "0.001",
-            "min_notional": 5.0, "tick_size": "0.01",
-        })
+        executor._get_symbol_filters = MagicMock(
+            return_value={
+                "step_size": "0.001",
+                "min_qty": "0.001",
+                "min_notional": 5.0,
+                "tick_size": "0.01",
+            }
+        )
         executor.client.futures_create_order.side_effect = _make_api_exception(
             -2010, "insufficient balance"
         )
@@ -479,10 +512,10 @@ class TestGetOpenPositions:
         """
         executor = _build_executor()
         executor.client.futures_position_information.return_value = [
-            {"symbol": "BTCUSDT",  "positionAmt": "0.000"},
-            {"symbol": "ETHUSDT",  "positionAmt": "1.5"},
-            {"symbol": "BNBUSDT",  "positionAmt": "0.0"},
-            {"symbol": "SOLUSDT",  "positionAmt": "-0.5"},
+            {"symbol": "BTCUSDT", "positionAmt": "0.000"},
+            {"symbol": "ETHUSDT", "positionAmt": "1.5"},
+            {"symbol": "BNBUSDT", "positionAmt": "0.0"},
+            {"symbol": "SOLUSDT", "positionAmt": "-0.5"},
             {"symbol": "DOGEUSDT", "positionAmt": "0"},
         ]
 

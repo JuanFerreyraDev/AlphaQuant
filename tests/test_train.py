@@ -40,25 +40,19 @@ class TestTrainFactory:
         self, mock_root: MagicMock, tmp_path: Path
     ) -> None:
         """Without config.json, raises RuntimeError."""
-        # Arrange
         mock_root.return_value = tmp_path
 
-        # Act / Assert
         with pytest.raises(RuntimeError, match="Configuration not found at"):
             train_factory("BTC_USDT")
 
     @patch("src.brain.train.get_project_root")
-    def test_raises_on_invalid_json(
-        self, mock_root: MagicMock, tmp_path: Path
-    ) -> None:
+    def test_raises_on_invalid_json(self, mock_root: MagicMock, tmp_path: Path) -> None:
         """Malformed JSON raises RuntimeError."""
-        # Arrange
         mock_root.return_value = tmp_path
         config_dir = tmp_path / "data" / "models" / "BTC_USDT"
         config_dir.mkdir(parents=True)
         (config_dir / "config.json").write_text("{{invalid json", encoding="utf-8")
 
-        # Act / Assert
         with pytest.raises(RuntimeError, match="Error parsing config.json"):
             train_factory("BTC_USDT")
 
@@ -68,7 +62,6 @@ class TestTrainFactory:
         self, mock_root: MagicMock, _mock_csv: MagicMock, tmp_path: Path
     ) -> None:
         """CSV not found raises RuntimeError."""
-        # Arrange
         mock_root.return_value = tmp_path
         config_dir = tmp_path / "data" / "models" / "BTC_USDT"
         config_dir.mkdir(parents=True)
@@ -76,7 +69,6 @@ class TestTrainFactory:
             json.dumps(SAMPLE_CONFIG), encoding="utf-8"
         )
 
-        # Act / Assert
         with pytest.raises(RuntimeError, match="Data file not found for"):
             train_factory("BTC_USDT")
 
@@ -99,7 +91,6 @@ class TestTrainFactory:
         tmp_path: Path,
     ) -> None:
         """Successful training exports a model with joblib.dump."""
-        # Arrange
         mock_root.return_value = tmp_path
         config_dir = tmp_path / "data" / "models" / "BTC_USDT"
         config_dir.mkdir(parents=True)
@@ -114,10 +105,8 @@ class TestTrainFactory:
         mock_target.return_value = df
         mock_cleanup.return_value = df
 
-        # Act
         train_factory("BTC_USDT")
 
-        # Assert
         mock_dump.assert_called_once()
         saved_dict = mock_dump.call_args[0][0]
         assert "model" in saved_dict
@@ -146,7 +135,6 @@ class TestTrainFactory:
         tmp_path: Path,
     ) -> None:
         """All-zero target (imbalance=1) does not cause errors."""
-        # Arrange
         mock_root.return_value = tmp_path
         config_dir = tmp_path / "data" / "models" / "BTC_USDT"
         config_dir.mkdir(parents=True)
@@ -155,13 +143,12 @@ class TestTrainFactory:
         )
 
         df = _make_training_df()
-        df["target"] = 0  # All zeros
+        df["target"] = 0
         mock_csv.return_value = df
         mock_technicals.return_value = df
         mock_sentiment.return_value = (df, False)
         mock_target.return_value = df
         mock_cleanup.return_value = df
 
-        # Act / Assert — should not raise
         train_factory("BTC_USDT")
         mock_dump.assert_called_once()

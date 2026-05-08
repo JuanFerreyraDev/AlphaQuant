@@ -118,6 +118,7 @@ def compute_all_technicals(df: pd.DataFrame) -> pd.DataFrame:
     compute_volume(df)
     return df
 
+
 def add_sentiment(df: pd.DataFrame, df_fg: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
     """Attempt to add sentiment columns to the DataFrame.
 
@@ -133,6 +134,6 @@ def add_sentiment(df: pd.DataFrame, df_fg: pd.DataFrame) -> tuple[pd.DataFrame, 
         df["fng_sma_14"] = df["fng_value"].rolling(14).mean()
         df["fng_vol_14"] = df["fng_value"].rolling(14).std()
         return df, True
-        
+
     logger.warning("Sentiment data is empty. The arena will be technical-only.")
     return df, False

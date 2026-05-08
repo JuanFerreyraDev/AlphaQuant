@@ -14,7 +14,11 @@ from src.brain.data_fetcher import (
 
 SAMPLE_FNG_RESPONSE = {
     "data": [
-        {"value": "25", "value_classification": "Extreme Fear", "timestamp": "1711843200"},
+        {
+            "value": "25",
+            "value_classification": "Extreme Fear",
+            "timestamp": "1711843200",
+        },
         {"value": "30", "value_classification": "Fear", "timestamp": "1711756800"},
     ]
 }
@@ -69,7 +73,9 @@ class TestGetFearAndGreedEdgeCases:
     def test_returns_empty_on_http_error(self, mock_get: MagicMock) -> None:
         """HTTPError returns an empty DataFrame without retries."""
         mock_response = MagicMock()
-        mock_response.raise_for_status.side_effect = requests.HTTPError("500 Server Error")
+        mock_response.raise_for_status.side_effect = requests.HTTPError(
+            "500 Server Error"
+        )
         mock_get.return_value = mock_response
 
         result = get_fear_and_greed()
@@ -239,9 +245,7 @@ class TestFetchOhlcvBinance:
 
     @pytest.mark.asyncio
     @patch("src.brain.data_fetcher.ccxt_async.binanceusdm")
-    async def test_retries_on_network_error(
-        self, mock_exchange_cls: MagicMock
-    ) -> None:
+    async def test_retries_on_network_error(self, mock_exchange_cls: MagicMock) -> None:
         """Retries on NetworkError and returns None after exhausting attempts."""
         import ccxt
 
@@ -263,7 +267,9 @@ class TestFetchOhlcvBinance:
         mock_exchange.fetch_ohlcv = AsyncMock(return_value=candles)
         mock_exchange.close = AsyncMock()
 
-        result = await fetch_ohlcv_binance("BTC_USDT", "1d", limit=1, exchange=mock_exchange)
+        result = await fetch_ohlcv_binance(
+            "BTC_USDT", "1d", limit=1, exchange=mock_exchange
+        )
 
         assert isinstance(result, pd.DataFrame)
         assert "close" in result.columns
