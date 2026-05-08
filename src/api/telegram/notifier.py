@@ -12,7 +12,9 @@ import telegram.error
 logger = logging.getLogger(__name__)
 
 
-async def send_trade_signal(app: Any, chat_id: int, signal_data: dict[str, Any]) -> None:
+async def send_trade_signal(
+    app: Any, chat_id: int, signal_data: dict[str, Any]
+) -> None:
     """Send a trading signal via Telegram using HTML syntax.
 
     Args:
@@ -38,14 +40,14 @@ async def send_trade_signal(app: Any, chat_id: int, signal_data: dict[str, Any])
     )
 
     try:
-        await app.bot.send_message(
-            chat_id=chat_id, text=message, parse_mode="HTML"
-        )
+        await app.bot.send_message(chat_id=chat_id, text=message, parse_mode="HTML")
     except telegram.error.TelegramError as exc:
         if isinstance(exc, telegram.error.NetworkError):
             logger.warning("Network error sending signal to Telegram: %s", exc)
         else:
-            logger.error("Error sending signal to Telegram (chat_id=%d): %s", chat_id, exc)
+            logger.error(
+                "Error sending signal to Telegram (chat_id=%d): %s", chat_id, exc
+            )
 
 
 async def send_execution_result(
@@ -66,8 +68,16 @@ async def send_execution_result(
     display = html.escape(safe_symbol.replace("_", "/"))
 
     if result:
-        sl_id = result["stop_loss"].get("clientAlgoId", "N/A") if result.get("stop_loss") else "N/A"
-        tp_id = result["take_profit"].get("clientAlgoId", "N/A") if result.get("take_profit") else "N/A"
+        sl_id = (
+            result["stop_loss"].get("clientAlgoId", "N/A")
+            if result.get("stop_loss")
+            else "N/A"
+        )
+        tp_id = (
+            result["take_profit"].get("clientAlgoId", "N/A")
+            if result.get("take_profit")
+            else "N/A"
+        )
         text = (
             f"✅ <b>Order executed in Binance Futures</b>\n\n"
             f"🔹 <b>Pair:</b> {display}\n"

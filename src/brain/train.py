@@ -27,6 +27,7 @@ from src.utils.helpers import (
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
 
+
 def train_factory(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
     """Train a model based on the configuration saved in config.json.
 
@@ -34,18 +35,13 @@ def train_factory(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
         symbol: Trading pair (e.g. ``'BTC_USDT'`` or ``'BTC/USDT'``).
         df_fg: Fear & Greed DataFrame (injected by the caller).
     """
-    safe_symbol = (
-        symbol.replace("/", "_").replace(":", "_").split("_USDT")[0] + "_USDT"
-    )
+    safe_symbol = symbol.replace("/", "_").replace(":", "_").split("_USDT")[0] + "_USDT"
     base_dir = get_project_root()
     config_path = base_dir / "data" / "models" / safe_symbol / "config.json"
 
     if not config_path.exists():
-        raise RuntimeError(
-            f"Configuration not found at {config_path}"
-        )
+        raise RuntimeError(f"Configuration not found at {config_path}")
 
-    # 1. Read configuration
     try:
         with config_path.open("r", encoding="utf-8") as fh:
             config: dict[str, Any] = json.load(fh)
@@ -64,14 +60,11 @@ def train_factory(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
     logger.info("Starting Training Factory for %s...", symbol)
     logger.info("Strategy: %s", strategy_name)
 
-    # 2. Load and prepare data
     filename = f"{safe_symbol}_1d.csv"
     try:
         df = load_csv_data(filename)
     except FileNotFoundError:
-        raise RuntimeError(
-            f"Data file not found for {symbol}"
-        )
+        raise RuntimeError(f"Data file not found for {symbol}")
 
     compute_all_technicals(df)
     df, _ = add_sentiment(df, df_fg if df_fg is not None else pd.DataFrame())
@@ -84,7 +77,6 @@ def train_factory(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
     )
     cleanup_columns(df)
 
-    # 3. Train model
     X = df[features_list]
     y = df["target"]
 
@@ -102,7 +94,6 @@ def train_factory(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
     logger.info("Training XGBClassifier with %d features...", len(features_list))
     model.fit(X, y)
 
-    # 4. Package and export
     paquete_produccion: dict[str, Any] = {
         "model": model,
         "features": features_list,
@@ -119,9 +110,8 @@ def train_factory(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
     safe_strategy_name = (
         strategy_name.replace("/", "_").replace(" ", "_").replace("+", "")
     )
-    safe_name = (
-        f"{safe_symbol}_{atr_tp_multi}_{atr_sl_multi}_{swing_period}_{optimal_threshold}"
-        .replace(".", "-")
+    safe_name = f"{safe_symbol}_{atr_tp_multi}_{atr_sl_multi}_{swing_period}_{optimal_threshold}".replace(
+        ".", "-"
     )
     out_filename = f"{safe_name}_{safe_strategy_name}.pkl".lower()
     out_path = models_dir / out_filename
@@ -150,9 +140,7 @@ if __name__ == "__main__":
     else:
         symbols = get_active_symbols()
         if not symbols:
-            logger.error(
-                "No symbol found in arguments or settings.yaml."
-            )
+            logger.error("No symbol found in arguments or settings.yaml.")
         else:
             logger.info("Batch Mode: Training %d models...", len(symbols))
             ok_count = 0

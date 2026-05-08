@@ -35,7 +35,10 @@ def _make_df() -> pd.DataFrame:
 
 
 class TestOptimizeStrategy:
-    @patch("src.brain.strategy_optimizer.load_csv_data", side_effect=FileNotFoundError("not found"))
+    @patch(
+        "src.brain.strategy_optimizer.load_csv_data",
+        side_effect=FileNotFoundError("not found"),
+    )
     def test_raises_when_csv_not_found(self, _mock: MagicMock) -> None:
         """CSV not found raises RuntimeError."""
         with pytest.raises(RuntimeError, match="File data/raw_csv/.* not found"):
@@ -61,7 +64,6 @@ class TestOptimizeStrategy:
         mock_train: MagicMock,
     ) -> None:
         """Without satisfactory results, raises RuntimeError."""
-        # Arrange
         df = _make_df()
         mock_csv.return_value = df
         mock_tech.return_value = df
@@ -72,9 +74,8 @@ class TestOptimizeStrategy:
         val_df = df.iloc[75:85]
         test_df = df.iloc[90:]
         mock_split.return_value = (train_df, val_df, test_df)
-        mock_strategies.return_value = {}  # No strategies → no results
+        mock_strategies.return_value = {}
 
-        # Act / Assert
         with pytest.raises(RuntimeError, match="No satisfactory results found for"):
             optimize_strategy("BTC_USDT")
 
@@ -101,7 +102,6 @@ class TestOptimizeStrategy:
         tmp_path: Path,
     ) -> None:
         """Writes the best config.json with the winning strategy."""
-        # Arrange
         mock_root.return_value = tmp_path
         df = _make_df()
         mock_csv.return_value = df
@@ -124,10 +124,8 @@ class TestOptimizeStrategy:
         metrics = {"Profit_Neto": 5.0}
         mock_train.return_value = (mock_model, metrics, preds_test, [], 0.65)
 
-        # Act
         optimize_strategy("BTC_USDT")
 
-        # Assert
         config_path = tmp_path / "data" / "models" / "BTC_USDT" / "config.json"
         assert config_path.exists()
         with config_path.open("r") as fh:
@@ -160,7 +158,6 @@ class TestOptimizeStrategy:
         tmp_path: Path,
     ) -> None:
         """Strategies with non-existent features in df are skipped."""
-        # Arrange
         mock_root.return_value = tmp_path
         df = _make_df()
         mock_csv.return_value = df
@@ -178,7 +175,6 @@ class TestOptimizeStrategy:
             "Invalid": ["nonexistent_col_1", "nonexistent_col_2"],
         }
 
-        # Act / Assert — no valid features → no results → RuntimeError
         with pytest.raises(RuntimeError, match="No satisfactory results found for"):
             optimize_strategy("BTC_USDT")
         mock_train.assert_not_called()
@@ -206,7 +202,6 @@ class TestOptimizeStrategy:
         tmp_path: Path,
     ) -> None:
         """Selects the configuration with the highest Profit_Neto."""
-        # Arrange
         mock_root.return_value = tmp_path
         df = _make_df()
         mock_csv.return_value = df
@@ -226,6 +221,7 @@ class TestOptimizeStrategy:
         }
 
         preds = np.array([0, 1, 0, 1, 0, 1, 0, 1, 0, 1])
+
         # The optimizer iterates over SWING_RANGE × ATR_TP_RANGE × ATR_SL_RANGE combos (36),
         # each time calling train_and_evaluate for each strategy (2).
         # Return low profit for "Low" and high profit for "High" on every call.
@@ -238,10 +234,8 @@ class TestOptimizeStrategy:
 
         mock_train.side_effect = _side_effect
 
-        # Act
         optimize_strategy("BTC_USDT")
 
-        # Assert
         config_path = tmp_path / "data" / "models" / "BTC_USDT" / "config.json"
         with config_path.open("r") as fh:
             config = json.load(fh)

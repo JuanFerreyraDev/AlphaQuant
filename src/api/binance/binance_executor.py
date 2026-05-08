@@ -41,7 +41,9 @@ class BinanceExecutor:
         api_key: str = os.getenv("BINANCE_API_KEY", "")
         api_secret: str = os.getenv("BINANCE_API_SECRET", "")
         use_testnet: bool = os.getenv("USE_TESTNET", "True").lower() in (
-            "true", "1", "yes",
+            "true",
+            "1",
+            "yes",
         )
 
         if not api_key or not api_secret:
@@ -79,7 +81,8 @@ class BinanceExecutor:
                     logger.warning(
                         "Open position detected for %s (amount: %s). "
                         "New order canceled to avoid averaging.",
-                        symbol, amt,
+                        symbol,
+                        amt,
                     )
                     return True
             return False
@@ -97,23 +100,17 @@ class BinanceExecutor:
             ``True`` if the configuration was successful.
         """
         try:
-            self.client.futures_change_margin_type(
-                symbol=symbol, marginType="ISOLATED"
-            )
+            self.client.futures_change_margin_type(symbol=symbol, marginType="ISOLATED")
             logger.info("Margin type set to ISOLATED for %s.", symbol)
         except BinanceAPIException as exc:
             if exc.code == -4046:
                 logger.info("%s already in ISOLATED mode.", symbol)
             else:
-                logger.error(
-                    "Error setting margin type for %s: %s", symbol, exc
-                )
+                logger.error("Error setting margin type for %s: %s", symbol, exc)
                 return False
 
         try:
-            self.client.futures_change_leverage(
-                symbol=symbol, leverage=self.leverage
-            )
+            self.client.futures_change_leverage(symbol=symbol, leverage=self.leverage)
             logger.info("Leverage set to %dx for %s.", self.leverage, symbol)
         except BinanceAPIException as exc:
             logger.error("Error setting leverage for %s: %s", symbol, exc)
@@ -132,9 +129,7 @@ class BinanceExecutor:
             for asset in balances:
                 if asset["asset"] == "USDT":
                     available = float(asset["availableBalance"])
-                    logger.info(
-                        "USDT balance available in Futures: %.4f", available
-                    )
+                    logger.info("USDT balance available in Futures: %.4f", available)
                     return available
             logger.warning("No USDT balance found in Futures.")
             return 0.0
@@ -166,16 +161,12 @@ class BinanceExecutor:
                             result["step_size"] = f["stepSize"]
                             result["min_qty"] = f["minQty"]
                         if f["filterType"] == "MIN_NOTIONAL":
-                            result["min_notional"] = float(
-                                f.get("notional", 0)
-                            )
+                            result["min_notional"] = float(f.get("notional", 0))
                         if f["filterType"] == "PRICE_FILTER":
                             result["tick_size"] = f["tickSize"]
                     break
         except BinanceAPIException as exc:
-            logger.error(
-                "Error getting exchange filters for %s: %s", symbol, exc
-            )
+            logger.error("Error getting exchange filters for %s: %s", symbol, exc)
         return result
 
     def _round_step_size(self, quantity: float, step_size: str) -> float:
@@ -205,7 +196,9 @@ class BinanceExecutor:
         """
         d_price = Decimal(str(price))
         d_tick = Decimal(tick_size)
-        rounded = (d_price / d_tick).quantize(Decimal("1"), rounding=ROUND_DOWN) * d_tick
+        rounded = (d_price / d_tick).quantize(
+            Decimal("1"), rounding=ROUND_DOWN
+        ) * d_tick
         return str(rounded)
 
     def _calculate_quantity(self, symbol: str) -> Optional[float]:
@@ -226,7 +219,9 @@ class BinanceExecutor:
         notional_size = margin * self.leverage
         logger.info(
             "Risk rule: Margen=%.4f USDT | Nocional=%.4f USDT (leverage %dx)",
-            margin, notional_size, self.leverage,
+            margin,
+            notional_size,
+            self.leverage,
         )
 
         try:
@@ -248,7 +243,9 @@ class BinanceExecutor:
         if quantity < float(filters["min_qty"]):
             logger.error(
                 "Calculated quantity (%.8f) below minQty (%.8f) for %s.",
-                quantity, float(filters["min_qty"]), symbol,
+                quantity,
+                float(filters["min_qty"]),
+                symbol,
             )
             return None
 
@@ -256,7 +253,9 @@ class BinanceExecutor:
         if filters["min_notional"] > 0 and actual_notional < filters["min_notional"]:
             logger.error(
                 "Actual notional (%.4f USDT) below MIN_NOTIONAL (%.4f USDT) for %s.",
-                actual_notional, filters["min_notional"], symbol,
+                actual_notional,
+                filters["min_notional"],
+                symbol,
             )
             return None
 
@@ -304,18 +303,14 @@ class BinanceExecutor:
                 "post", "algoOrder", signed=True, data=params
             )
 
-            order_id = response.get("orderId") or response.get(
-                "clientAlgoId", "N/A"
-            )
+            order_id = response.get("orderId") or response.get("clientAlgoId", "N/A")
             logger.info(
                 "Order %s placed successfully: %s @ %s", b_type, order_id, stop_price
             )
             return response
 
         except BinanceAPIException as exc:
-            logger.error(
-                "Error placing %s order for %s: %s", order_type, symbol, exc
-            )
+            logger.error("Error placing %s order for %s: %s", order_type, symbol, exc)
             return None
 
     def get_futures_balance(self) -> float:
@@ -349,7 +344,10 @@ class BinanceExecutor:
             side = "SELL" if amt > 0 else "BUY"
             try:
                 self.client.futures_create_order(
-                    symbol=sym, side=side, type="MARKET", quantity=abs(amt),
+                    symbol=sym,
+                    side=side,
+                    type="MARKET",
+                    quantity=abs(amt),
                 )
                 closed += 1
                 symbols_touched.add(sym)
@@ -388,7 +386,10 @@ class BinanceExecutor:
 
         logger.info(
             "Starting trade: %s %s | SL=%.4f | TP=%.4f",
-            side, symbol, sl_price, tp_price,
+            side,
+            symbol,
+            sl_price,
+            tp_price,
         )
 
         if self._has_open_position(symbol):
@@ -414,13 +415,9 @@ class BinanceExecutor:
                 type="MARKET",
                 quantity=quantity,
             )
-            logger.info(
-                "MARKET order executed: %s", entry_order.get("orderId")
-            )
+            logger.info("MARKET order executed: %s", entry_order.get("orderId"))
         except BinanceAPIException as exc:
-            logger.error(
-                "Error executing MARKET order for %s: %s", symbol, exc
-            )
+            logger.error("Error executing MARKET order for %s: %s", symbol, exc)
             return None
 
         time.sleep(1)

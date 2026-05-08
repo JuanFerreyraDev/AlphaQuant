@@ -23,19 +23,35 @@ import joblib
 import pandas as pd
 
 from src.api.binance.binance_executor import BinanceExecutor
-from src.api.telegram.notifier import send_execution_error, send_execution_result, send_trade_signal
-from src.brain.data_fetcher import fetch_historical_data, fetch_ohlcv_binance, get_fear_and_greed
+from src.api.telegram.notifier import (
+    send_execution_error,
+    send_execution_result,
+    send_trade_signal,
+)
+from src.brain.data_fetcher import (
+    fetch_historical_data,
+    fetch_ohlcv_binance,
+    get_fear_and_greed,
+)
 from src.brain.features import compute_all_technicals, add_sentiment
 from src.brain.strategy_optimizer import optimize_strategy
 from src.brain.train import train_factory
-from src.config.settings_loader import get_active_market, get_active_symbols, get_project_root
+from src.config.settings_loader import (
+    get_active_market,
+    get_active_symbols,
+    get_project_root,
+)
 
 logger = logging.getLogger(__name__)
 
 TRAINING_COOLDOWN_DAYS: int = 14
 
 REQUIRED_KEYS: list[str] = [
-    "model", "features", "threshold", "atr_tp_multi", "atr_sl_multi",
+    "model",
+    "features",
+    "threshold",
+    "atr_tp_multi",
+    "atr_sl_multi",
 ]
 
 
@@ -53,9 +69,10 @@ def run_full_training_pipeline(symbol: str) -> tuple[bool, str, str]:
 
     Raises:
         RuntimeError: If any of the 3 steps fails.
-    
+
     Returns:
-        Tuple ``(trained, safe_symbol, reason)``.  If ``trained`` is ``False``, ``reason`` describes why it was skipped.
+        Tuple ``(trained, safe_symbol, reason)``.
+        If ``trained`` is ``False``, ``reason`` describes why it was skipped.
     """
     safe_symbol = _sanitize_symbol(symbol)
     needs_training, reason = _check_training_freshness(safe_symbol)
@@ -74,7 +91,7 @@ def run_full_training_pipeline(symbol: str) -> tuple[bool, str, str]:
     train_factory(safe_symbol, df_fg)
 
     logger.info("[Pipeline] Pipeline complete for %s.", safe_symbol)
-    
+
     return needs_training, safe_symbol, ""
 
 
@@ -129,7 +146,10 @@ def _check_training_freshness(safe_symbol: str) -> tuple[bool, str]:
         return True, ""
 
     if days_elapsed < TRAINING_COOLDOWN_DAYS:
-        return False, f"Trained {days_elapsed} day(s) ago, less than {TRAINING_COOLDOWN_DAYS} days"
+        return (
+            False,
+            f"Trained {days_elapsed} day(s) ago, less than {TRAINING_COOLDOWN_DAYS} days",
+        )
 
     return True, ""
 
@@ -192,14 +212,22 @@ async def daily_market_evaluation(app: Any, chat_id: int) -> int:
                 model_name = os.path.basename(model_path)
                 try:
                     signals_sent += await _evaluate_model(
-                        app, chat_id, executor, active_market,
-                        safe_symbol, model_path, model_name, df_fg,
+                        app,
+                        chat_id,
+                        executor,
+                        active_market,
+                        safe_symbol,
+                        model_path,
+                        model_name,
+                        df_fg,
                         exchange,
                     )
                 except Exception as exc:
                     logger.error(
                         "Error processing %s with model %s: %s",
-                        safe_symbol, model_name, exc,
+                        safe_symbol,
+                        model_name,
+                        exc,
                     )
     finally:
         await exchange.close()
@@ -267,15 +295,15 @@ async def _evaluate_model(
     threshold: float = model_dict["threshold"]
     atr_tp_multi: float = model_dict["atr_tp_multi"]
     atr_sl_multi: float = model_dict["atr_sl_multi"]
-    strategy_name: str = model_dict.get(
-        "strategy_name", model_name.replace(".pkl", "")
-    )
+    strategy_name: str = model_dict.get("strategy_name", model_name.replace(".pkl", ""))
 
     if not model or not features:
         logger.warning("Invalid .pkl file: %s", model_path)
         return 0
 
-    df = await fetch_ohlcv_binance(safe_symbol, timeframe="1d", limit=100, exchange=exchange)
+    df = await fetch_ohlcv_binance(
+        safe_symbol, timeframe="1d", limit=100, exchange=exchange
+    )
     if df is None or df.empty:
         logger.warning("Missing or empty data for %s.", safe_symbol)
         return 0
@@ -303,9 +331,7 @@ async def _evaluate_model(
     try:
         vela_filtrada = last_candle[features]
     except KeyError as exc:
-        logger.warning(
-            "[%s] Missing features for %s: %s", safe_symbol, model_name, exc
-        )
+        logger.warning("[%s] Missing features for %s: %s", safe_symbol, model_name, exc)
         return 0
 
     proba_array = model.predict_proba(vela_filtrada)
@@ -322,7 +348,13 @@ async def _evaluate_model(
     logger.info(
         "[%s] Signal detected by %s (Prob: %.4f > %.4f) | "
         "Price: %.4f | TP: %.4f | SL: %.4f",
-        safe_symbol, strategy_name, proba, threshold, current_price, tp, sl,
+        safe_symbol,
+        strategy_name,
+        proba,
+        threshold,
+        current_price,
+        tp,
+        sl,
     )
 
     signal_data: dict[str, Any] = {
@@ -360,12 +392,14 @@ async def _execute_and_notify(
     """
     try:
         result = await asyncio.to_thread(
-            executor.execute_futures_trade, safe_symbol, "BUY", sl, tp,
+            executor.execute_futures_trade,
+            safe_symbol,
+            "BUY",
+            sl,
+            tp,
         )
         await send_execution_result(app, chat_id, result, safe_symbol)
 
     except (ConnectionError, TimeoutError, ValueError) as exec_err:
-        logger.warning(
-            "Error executing trade for %s: %s", safe_symbol, exec_err
-        )
+        logger.warning("Error executing trade for %s: %s", safe_symbol, exec_err)
         await send_execution_error(app, chat_id, safe_symbol, exec_err)

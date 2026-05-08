@@ -44,9 +44,7 @@ class TestLoadCsvData:
     def test_loads_valid_csv(self, sample_ohlcv_csv: Path) -> None:
         from unittest.mock import patch
 
-        with patch(
-            "src.utils.helpers.get_project_root", return_value=sample_ohlcv_csv
-        ):
+        with patch("src.utils.helpers.get_project_root", return_value=sample_ohlcv_csv):
             df = load_csv_data("TEST_USDT_1d.csv")
             assert isinstance(df, pd.DataFrame)
             assert "close" in df.columns
@@ -196,10 +194,12 @@ class TestFindOptimalThreshold:
     def test_picks_best_profit_threshold(self) -> None:
         """Selects the threshold with the highest net profit."""
         mock_model = MagicMock()
-        probas = np.column_stack([
-            np.zeros(50),
-            np.linspace(0.4, 0.9, 50),
-        ])
+        probas = np.column_stack(
+            [
+                np.zeros(50),
+                np.linspace(0.4, 0.9, 50),
+            ]
+        )
         mock_model.predict_proba.return_value = probas
         X_val = pd.DataFrame({"f1": range(50)})
         y_val = pd.Series([1] * 30 + [0] * 20)
@@ -265,7 +265,9 @@ class TestBuildStrategies:
 
 
 class TestTrainAndEvaluate:
-    def test_returns_correct_tuple_structure(self, ohlcv_df_with_technicals: pd.DataFrame) -> None:
+    def test_returns_correct_tuple_structure(
+        self, ohlcv_df_with_technicals: pd.DataFrame
+    ) -> None:
         """Verifies return structure: (model, metrics, preds_test, buy_dates, threshold)."""
         df = ohlcv_df_with_technicals.copy()
         df["target"] = np.random.randint(0, 2, len(df))
