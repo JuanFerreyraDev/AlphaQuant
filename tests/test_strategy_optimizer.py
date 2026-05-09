@@ -121,7 +121,7 @@ class TestOptimizeStrategy:
 
         mock_model = MagicMock()
         preds_test = np.array([0, 1, 0, 1, 0, 1, 0, 1, 0, 1])
-        metrics = {"Profit_Neto": 5.0}
+        metrics = {"net_profit_pct": 5.0}
         mock_train.return_value = (mock_model, metrics, preds_test, [], 0.65)
 
         optimize_strategy("BTC_USDT")
@@ -201,7 +201,7 @@ class TestOptimizeStrategy:
         mock_root: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Selects the configuration with the highest Profit_Neto."""
+        """Selects the configuration with the highest net_profit_pct."""
         mock_root.return_value = tmp_path
         df = _make_df()
         mock_csv.return_value = df
@@ -229,8 +229,8 @@ class TestOptimizeStrategy:
             # We can detect which strategy by the X_train columns
             X_train = args[0]
             if "macd" in X_train.columns:
-                return (MagicMock(), {"Profit_Neto": 10.0}, preds, [], 0.70)
-            return (MagicMock(), {"Profit_Neto": 1.0}, preds, [], 0.60)
+                return (MagicMock(), {"net_profit_pct": 10.0}, preds, [], 0.70)
+            return (MagicMock(), {"net_profit_pct": 1.0}, preds, [], 0.60)
 
         mock_train.side_effect = _side_effect
 

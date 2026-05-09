@@ -48,7 +48,7 @@ class BinanceExecutor:
 
         if not api_key or not api_secret:
             raise ValueError(
-                "BINANCE_API_KEY y BINANCE_API_SECRET deben estar definidos en .env"
+                "BINANCE_API_KEY and BINANCE_API_SECRET must be defined in .env"
             )
 
         self.client: Client = Client(api_key, api_secret, testnet=use_testnet)
@@ -87,7 +87,7 @@ class BinanceExecutor:
                     return True
             return False
         except BinanceAPIException as exc:
-            logger.error("Error consultando posiciones para %s: %s", symbol, exc)
+            logger.error("Error querying positions for %s: %s", symbol, exc)
             return True
 
     def _configure_symbol(self, symbol: str) -> bool:
@@ -218,7 +218,7 @@ class BinanceExecutor:
         margin = balance * self.risk_pct
         notional_size = margin * self.leverage
         logger.info(
-            "Risk rule: Margen=%.4f USDT | Nocional=%.4f USDT (leverage %dx)",
+            "Risk rule: Margin=%.4f USDT | Notional=%.4f USDT (leverage %dx)",
             margin,
             notional_size,
             self.leverage,

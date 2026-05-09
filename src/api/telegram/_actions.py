@@ -366,7 +366,7 @@ async def _on_panic(query: Any, context: ContextTypes.DEFAULT_TYPE) -> int:
     try:
         closed = await asyncio.to_thread(executor.close_all_positions)
         await query.edit_message_text(
-            f"🚨 <b>PPanic executed</b>\n\n"
+            f"🚨 <b>Panic executed</b>\n\n"
             f"Closed positions: <b>{closed}</b>\n"
             f"Open orders: <b>Cancelled</b>",
             reply_markup=_kb_futures(_current_margin()),

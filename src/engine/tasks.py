@@ -329,12 +329,12 @@ async def _evaluate_model(
         atr_value = float(last_candle["high"].iloc[0] - last_candle["low"].iloc[0])
 
     try:
-        vela_filtrada = last_candle[features]
+        filtered_candle = last_candle[features]
     except KeyError as exc:
         logger.warning("[%s] Missing features for %s: %s", safe_symbol, model_name, exc)
         return 0
 
-    proba_array = model.predict_proba(vela_filtrada)
+    proba_array = model.predict_proba(filtered_candle)
     proba: float = float(
         proba_array[0, 1] if proba_array.shape[1] > 1 else proba_array[0][0]
     )
