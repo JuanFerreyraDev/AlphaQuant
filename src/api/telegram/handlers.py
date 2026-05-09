@@ -122,7 +122,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # Spot
     if data == "menu:spot":
-        await query.answer("⏳ Comming Soon...", show_alert=True)
+        await query.answer("⏳ Coming Soon...", show_alert=True)
         return NAVIGATING
 
     await query.answer()

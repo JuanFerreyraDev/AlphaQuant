@@ -235,10 +235,10 @@ class TestBuildStrategies:
         for name, features in strategies.items():
             for col in SENTIMENT_COLS:
                 assert col not in features
-        assert "Puramente Momentum + Sentimiento" not in strategies
+        assert "Pure Momentum + Sentiment" not in strategies
 
     def test_with_sentiment_adds_fng_columns(self) -> None:
-        """With sentiment, '+Sentimiento' variants including FNG are created."""
+        """With sentiment, '+Sentiment' variants including FNG are created."""
         df = pd.DataFrame(
             {
                 "rsi_14": [50.0],
@@ -258,8 +258,8 @@ class TestBuildStrategies:
 
         strategies = build_strategies(df, has_sentiment=True)
 
-        assert "Puramente Momentum + Sentimiento" in strategies
-        sentiment_features = strategies["Puramente Momentum + Sentimiento"]
+        assert "Pure Momentum + Sentiment" in strategies
+        sentiment_features = strategies["Pure Momentum + Sentiment"]
         for col in SENTIMENT_COLS:
             assert col in sentiment_features
 
@@ -292,7 +292,7 @@ class TestTrainAndEvaluate:
         model, metrics, preds_test, buy_dates, threshold = result
         assert hasattr(model, "predict_proba")
         assert isinstance(metrics, dict)
-        assert "Profit_Neto" in metrics
+        assert "net_profit_pct" in metrics
         assert isinstance(preds_test, np.ndarray)
         assert isinstance(threshold, float)
 

@@ -428,7 +428,7 @@ class TestExecuteAndNotify:
 
         mock_telegram_app.bot.send_message.assert_awaited_once()
         text = mock_telegram_app.bot.send_message.call_args[1]["text"]
-        assert "no ejecutado" in text.lower() or "Trade no" in text
+        assert "Trade no" in text or "not executed" in text.lower()
 
     @pytest.mark.asyncio
     async def test_sends_alert_on_execution_error(
@@ -542,7 +542,7 @@ class TestRunFullTrainingPipeline:
         mock_optimize: MagicMock,
         mock_train: MagicMock,
     ) -> None:
-        """Pipeline ejecuta fetch → optimize → train en orden."""
+        """Pipeline executes fetch → optimize → train in order."""
         call_order: list[str] = []
         mock_fetch.side_effect = lambda *a, **kw: call_order.append("fetch")
         mock_optimize.side_effect = lambda *a, **kw: call_order.append("optimize")
@@ -565,7 +565,7 @@ class TestRunFullTrainingPipeline:
         _mock_freshness: MagicMock,
         _mock: MagicMock,
     ) -> None:
-        """Error en fetch_historical_data se propaga como RuntimeError."""
+        """Error in fetch_historical_data propagates as RuntimeError."""
         with pytest.raises(RuntimeError, match="download failed"):
             run_full_training_pipeline("BTC_USDT")
 
@@ -583,7 +583,7 @@ class TestRunFullTrainingPipeline:
         _mock_fg: MagicMock,
         _mock_opt: MagicMock,
     ) -> None:
-        """Error en optimize_strategy se propaga."""
+        """Error in optimize_strategy propagates."""
         with pytest.raises(RuntimeError, match="optimization failed"):
             run_full_training_pipeline("BTC_USDT")
 
@@ -602,7 +602,7 @@ class TestRunFullTrainingPipeline:
         _mock_opt: MagicMock,
         _mock_train: MagicMock,
     ) -> None:
-        """Error en train_factory se propaga."""
+        """Error in train_factory propagates."""
         with pytest.raises(RuntimeError, match="training failed"):
             run_full_training_pipeline("BTC_USDT")
 

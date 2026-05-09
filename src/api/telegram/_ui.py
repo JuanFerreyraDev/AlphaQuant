@@ -45,7 +45,7 @@ def _kb_bot(paused: bool) -> InlineKeyboardMarkup:
             ],
             [InlineKeyboardButton("🧠 Train AI", callback_data="action:train")],
             [InlineKeyboardButton(toggle_text, callback_data=toggle_data)],
-            [InlineKeyboardButton("🔙 Volver", callback_data="menu:main")],
+            [InlineKeyboardButton("🔙 Back", callback_data="menu:main")],
         ]
     )
 
@@ -61,7 +61,7 @@ def _kb_exchange() -> InlineKeyboardMarkup:
 
 
 def _kb_futures(margin_type: str) -> InlineKeyboardMarkup:
-    margin_label = f"🔄 Margen: {margin_type}"
+    margin_label = f"🔄 Margin: {margin_type}"
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("💰 View Balance", callback_data="action:balance")],

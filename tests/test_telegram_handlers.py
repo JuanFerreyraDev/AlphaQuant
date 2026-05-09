@@ -226,7 +226,7 @@ class TestNavigationCallbacks:
         assert result == NAVIGATING
         update.callback_query.answer.assert_awaited_once()
         call_args = update.callback_query.answer.call_args
-        assert "Comming Soon" in call_args[0][0]
+        assert "Coming Soon" in call_args[0][0]
         assert call_args[1]["show_alert"] is True
 
     @pytest.mark.asyncio

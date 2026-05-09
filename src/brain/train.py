@@ -94,7 +94,7 @@ def train_factory(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
     logger.info("Training XGBClassifier with %d features...", len(features_list))
     model.fit(X, y)
 
-    paquete_produccion: dict[str, Any] = {
+    production_bundle: dict[str, Any] = {
         "model": model,
         "features": features_list,
         "threshold": optimal_threshold,
@@ -116,7 +116,7 @@ def train_factory(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
     out_filename = f"{safe_name}_{safe_strategy_name}.pkl".lower()
     out_path = models_dir / out_filename
 
-    joblib.dump(paquete_produccion, out_path)
+    joblib.dump(production_bundle, out_path)
     logger.info("Model exported successfully to: %s", out_path)
     logger.info("Ready for production with threshold: %s", optimal_threshold)
 
@@ -150,7 +150,7 @@ if __name__ == "__main__":
                     train_factory(s, fng_data)
                     ok_count += 1
                 except (KeyError, ValueError, IOError) as exc:
-                    logger.error("Error entrenando %s: %s", s, exc)
+                    logger.error("Error training %s: %s", s, exc)
                     fail_count += 1
                     continue
 

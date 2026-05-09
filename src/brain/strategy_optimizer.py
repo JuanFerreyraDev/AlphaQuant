@@ -109,7 +109,7 @@ def optimize_strategy(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
                     "atr_tp_multi": float(tp_m),
                     "atr_sl_multi": float(sl_m),
                     "swing_period": int(sw),
-                    "profit_neto": metrics["Profit_Neto"],
+                    "net_profit": metrics["net_profit_pct"],
                     "recent_signals": recent_signals,
                 }
             )
@@ -119,7 +119,7 @@ def optimize_strategy(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
 
     best_config = sorted(
         all_results,
-        key=lambda x: (x["profit_neto"], x["recent_signals"]),
+        key=lambda x: (x["net_profit"], x["recent_signals"]),
         reverse=True,
     )[0]
 
@@ -147,7 +147,7 @@ def optimize_strategy(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
     logger.info(
         "Winner: %s | Profit (Val): %s",
         final_json["strategy_name"],
-        best_config["profit_neto"],
+        best_config["net_profit"],
     )
 
 
@@ -177,5 +177,5 @@ if __name__ == "__main__":
                 try:
                     optimize_strategy(s, fng_data)
                 except (KeyError, ValueError, IOError) as exc:
-                    logger.error("Error optimizando %s: %s", s, exc)
+                    logger.error("Error optimizing %s: %s", s, exc)
                     continue

@@ -180,9 +180,9 @@ def find_optimal_threshold(
         if n_signals < min_signals_val:
             continue
 
-        aciertos = int(((y_val == 1) & (preds == 1)).sum())
-        fallos = int(((y_val == 0) & (preds == 1)).sum())
-        profit = aciertos * tp_val - fallos * sl_val
+        hits = int(((y_val == 1) & (preds == 1)).sum())
+        misses = int(((y_val == 0) & (preds == 1)).sum())
+        profit = hits * tp_val - misses * sl_val
 
         if profit > best_profit:
             best_profit = profit
@@ -209,13 +209,13 @@ def build_strategies(
         Dictionary ``{strategy_name: [feature_list]}``.
     """
     base_strategies: dict[str, list[str]] = {
-        "Puramente Momentum": ["rsi_14", "macd", "macd_hist", "stoch_k"],
-        "Seguidor de Tendencia": ["dist_ema_50", "adx_14"],
-        "Cazador de Volatilidad": ["atr_14", "bb_width", "bb_pos"],
-        "El Confirmador (Volumen)": ["obv", "rel_volume"],
-        "Momentum + Volatilidad": ["rsi_14", "macd_hist", "atr_14", "bb_width"],
-        "Tendencia + Volumen": ["dist_ema_50", "adx_14", "obv", "rel_volume"],
-        "EL FRANKENSTEIN (Técnicos)": [
+        "Pure Momentum": ["rsi_14", "macd", "macd_hist", "stoch_k"],
+        "Trend Follower": ["dist_ema_50", "adx_14"],
+        "Volatility Hunter": ["atr_14", "bb_width", "bb_pos"],
+        "Volume Confirmer": ["obv", "rel_volume"],
+        "Momentum + Volatility": ["rsi_14", "macd_hist", "atr_14", "bb_width"],
+        "Trend + Volume": ["dist_ema_50", "adx_14", "obv", "rel_volume"],
+        "THE FRANKENSTEIN (Technicals)": [
             c for c in df.columns if c not in ["target"] + SENTIMENT_COLS
         ],
     }
@@ -224,7 +224,7 @@ def build_strategies(
     for name, features in base_strategies.items():
         all_strategies[name] = features
         if has_sentiment:
-            all_strategies[f"{name} + Sentimiento"] = features + SENTIMENT_COLS
+            all_strategies[f"{name} + Sentiment"] = features + SENTIMENT_COLS
 
     return all_strategies
 
@@ -279,21 +279,21 @@ def train_and_evaluate(
     preds_val = (y_probs_val >= best_threshold).astype(int)
 
     prec_val: float = precision_score(y_val, preds_val, zero_division=0)
-    señales_val = int(sum(preds_val))
-    aciertos_val = int(sum((preds_val == 1) & (y_val == 1)))
+    val_signals = int(sum(preds_val))
+    val_hits = int(sum((preds_val == 1) & (y_val == 1)))
 
-    profit_neto_val = aciertos_val * tp_val - (señales_val - aciertos_val) * sl_val
-    profit_factor_val = (aciertos_val * tp_val) / max(
-        (señales_val - aciertos_val) * sl_val, 0.01
+    net_profit_val = val_hits * tp_val - (val_signals - val_hits) * sl_val
+    profit_factor_val = (val_hits * tp_val) / max(
+        (val_signals - val_hits) * sl_val, 0.01
     )
 
     metrics: dict[str, Any] = {
-        "Profit_Neto": round(profit_neto_val, 2),
-        "Profit_Factor": round(profit_factor_val, 2),
-        "Precisión": round(prec_val * 100, 2),
-        "Señales_Val": señales_val,
-        "Aciertos_Val": aciertos_val,
-        "Umbral_Opt": round(best_threshold, 3),
+        "net_profit_pct": round(net_profit_val, 2),
+        "profit_factor": round(profit_factor_val, 2),
+        "accuracy": round(prec_val * 100, 2),
+        "val_signals": val_signals,
+        "val_hits": val_hits,
+        "opt_threshold": round(best_threshold, 3),
     }
 
     y_probs_test: np.ndarray = model.predict_proba(X_test)[:, 1]
