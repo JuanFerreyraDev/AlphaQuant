@@ -14,8 +14,9 @@ from typing import Any
 from telegram.ext import ContextTypes
 
 from src.config.settings_loader import (
+    load_bot_state,
     load_settings,
-    save_settings,
+    save_bot_state,
     get_active_symbols,
 )
 
@@ -48,7 +49,7 @@ async def _on_status(query: Any, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     paused = context.application.bot_data.get("paused", False)
     label = "⏸️ Paused" if paused else "✅ Active"
-    n_sym = len(load_settings().get("futures", {}).get("symbols", []))
+    n_sym = len(load_bot_state().get("symbols", {}).get("futures", []))
     await query.edit_message_text(
         f"📊 <b>Bot Status</b>\n\n"
         f"Status: <b>{label}</b>\n"
@@ -327,11 +328,11 @@ async def _on_margin_toggle(query: Any) -> int:
     Returns:
         ``NAVIGATING`` state constant.
     """
-    settings = load_settings()
-    current = settings.get("futures", {}).get("margin_type", "ISOLATED")
+    state = load_bot_state()
+    current = state.get("margin_type", "ISOLATED")
     new_margin = "CROSSED" if current == "ISOLATED" else "ISOLATED"
-    settings.setdefault("futures", {})["margin_type"] = new_margin
-    save_settings(settings)
+    state["margin_type"] = new_margin
+    save_bot_state(state)
     await query.edit_message_text(
         _txt_futures(),
         reply_markup=_kb_futures(new_margin),
