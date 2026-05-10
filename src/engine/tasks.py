@@ -39,6 +39,7 @@ from src.brain.train import train_factory
 from src.config.settings_loader import (
     get_active_market,
     get_active_symbols,
+    get_bot_active,
     get_project_root,
 )
 
@@ -170,6 +171,10 @@ async def daily_market_evaluation(app: Any, chat_id: int) -> int:
     active_market: str = get_active_market()
     active_symbols: list[str] = get_active_symbols()
     base_models_dir = os.path.join("data", "models")
+
+    if not get_bot_active():
+        logger.info("Bot is paused (bot_active=False). Skipping daily evaluation.")
+        return 0
 
     if not active_symbols:
         logger.warning("No active symbols in settings.yaml.")
