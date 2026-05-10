@@ -42,3 +42,6 @@ data/raw_csv/*.csv
 # Models
 data/models/*
 !data/models/.gitkeep
+
+# Bot runtime state
+data/bot_state.json
