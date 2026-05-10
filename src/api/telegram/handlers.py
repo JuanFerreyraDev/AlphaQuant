@@ -26,7 +26,7 @@ from telegram.ext import (
     filters,
 )
 
-from src.config.settings_loader import load_settings, save_settings
+from src.config.settings_loader import load_bot_state, load_settings, save_bot_state
 
 from ._actions import (
     _on_balance,
@@ -179,7 +179,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return WAITING_ADD_SYMBOL
 
     if data == "action:remove_symbol":
-        symbols = load_settings().get("futures", {}).get("symbols", [])
+        symbols = load_bot_state().get("symbols", {}).get("futures", [])
         listing = "\n".join(f"• <code>{s}</code>" for s in symbols) or "Empty list."
         await query.edit_message_text(
             f"🗑️ <b>Remove Symbol</b>\n\nCurrent symbols:\n{listing}\n\n"
@@ -193,6 +193,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "action:pause":
         context.application.bot_data["paused"] = True
+        _state = load_bot_state()
+        _state["bot_active"] = False
+        save_bot_state(_state)
         await query.edit_message_text(
             "⏸️ <b>Bot PAUSED</b>\n\nAutomatic operations will not be executed.",
             reply_markup=_kb_bot(True),
@@ -202,6 +205,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data == "action:resume":
         context.application.bot_data["paused"] = False
+        _state = load_bot_state()
+        _state["bot_active"] = True
+        save_bot_state(_state)
         await query.edit_message_text(
             "▶️ <b>Bot RESUMED</b>\n\nAutomatic operations activated.",
             reply_markup=_kb_bot(False),
@@ -220,7 +226,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return await _on_scan(query, context)
 
     if data == "action:leverage":
-        lev = load_settings().get("futures", {}).get("default_leverage", 1)
+        lev = load_bot_state().get("user_preferences", {}).get("default_leverage", 1)
         await query.edit_message_text(
             f"⚙️ <b>Modify Leverage</b>\n\n"
             f"Current value: <b>{lev}x</b>\n"
@@ -231,7 +237,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return WAITING_LEVERAGE
 
     if data == "action:risk":
-        risk = load_settings().get("global", {}).get("risk_per_trade_pct", 1.0)
+        risk = (
+            load_bot_state().get("user_preferences", {}).get("risk_per_trade_pct", 1.0)
+        )
         await query.edit_message_text(
             f"⚖️ <b>Modify Risk (%)</b>\n\n"
             f"Current value: <b>{risk}%</b>\n"
@@ -283,8 +291,8 @@ async def receive_add_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return WAITING_ADD_SYMBOL
 
-    settings = load_settings()
-    symbols: list[str] = settings.get("futures", {}).get("symbols", [])
+    state = load_bot_state()
+    symbols: list[str] = state.get("symbols", {}).get("futures", [])
 
     if text in symbols:
         await update.message.reply_text(
@@ -294,8 +302,8 @@ async def receive_add_symbol(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return WAITING_ADD_SYMBOL
 
     symbols.append(text)
-    settings.setdefault("futures", {})["symbols"] = symbols
-    save_settings(settings)
+    state.setdefault("symbols", {})["futures"] = symbols
+    save_bot_state(state)
 
     paused = context.application.bot_data.get("paused", False)
     await update.message.reply_text(
@@ -310,8 +318,8 @@ async def receive_remove_symbol(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> int:
     text = update.message.text.strip().upper()
-    settings = load_settings()
-    symbols: list[str] = settings.get("futures", {}).get("symbols", [])
+    state = load_bot_state()
+    symbols: list[str] = state.get("symbols", {}).get("futures", [])
 
     if text not in symbols:
         await update.message.reply_text(
@@ -322,8 +330,8 @@ async def receive_remove_symbol(
         return WAITING_REMOVE_SYMBOL
 
     symbols.remove(text)
-    settings["futures"]["symbols"] = symbols
-    save_settings(settings)
+    state.setdefault("symbols", {})["futures"] = symbols
+    save_bot_state(state)
 
     paused = context.application.bot_data.get("paused", False)
     await update.message.reply_text(
@@ -351,11 +359,11 @@ async def receive_leverage(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return WAITING_LEVERAGE
 
-    settings = load_settings()
-    settings.setdefault("futures", {})["default_leverage"] = value
-    save_settings(settings)
+    state = load_bot_state()
+    state.setdefault("user_preferences", {})["default_leverage"] = value
+    save_bot_state(state)
 
-    margin = settings.get("futures", {}).get("margin_type", "ISOLATED")
+    margin = state.get("margin_type", "ISOLATED")
     await update.message.reply_text(
         f"✅ Leverage updated to <b>{value}x</b>",
         reply_markup=_kb_futures(margin),
@@ -381,11 +389,11 @@ async def receive_risk(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         )
         return WAITING_RISK
 
-    settings = load_settings()
-    settings.setdefault("global", {})["risk_per_trade_pct"] = round(value, 2)
-    save_settings(settings)
+    state = load_bot_state()
+    state.setdefault("user_preferences", {})["risk_per_trade_pct"] = round(value, 2)
+    save_bot_state(state)
 
-    margin = settings.get("futures", {}).get("margin_type", "ISOLATED")
+    margin = state.get("margin_type", "ISOLATED")
     await update.message.reply_text(
         f"✅ Risk updated to <b>{value}%</b>",
         reply_markup=_kb_futures(margin),
