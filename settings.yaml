@@ -2,6 +2,7 @@ global:
   active_market: futures
   timeframe: 1d
   risk_per_trade_pct: 1.0
+  default_bot_active: true
 futures:
   default_leverage: 2
   margin_type: ISOLATED

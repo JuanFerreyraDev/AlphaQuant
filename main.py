@@ -18,6 +18,7 @@ from telegram import Update
 from telegram.ext import Application, ApplicationBuilder, ContextTypes
 
 from src.api.telegram.handlers import build_conversation_handler
+from src.config.settings_loader import load_bot_state
 from src.engine.tasks import daily_market_evaluation, run_full_training_pipeline
 from src.utils.logging_config import setup_logging
 
@@ -35,6 +36,11 @@ async def _post_init(app: Application) -> None:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
     app.bot_data["auth_chat_id"] = int(os.getenv("AUTHORIZED_CHAT_ID", "0"))
+    app.bot_data["paused"] = not load_bot_state().get("bot_active", True)
+    logger.info(
+        "Bot active state loaded from bot_state.json (paused=%s).",
+        app.bot_data["paused"],
+    )
 
     try:
         from src.api.binance.binance_executor import BinanceExecutor
