@@ -13,7 +13,7 @@ import warnings
 from typing import Any
 
 import pandas as pd
-
+    
 
 from src.brain.features import compute_all_technicals, add_sentiment
 from src.config.settings_loader import get_active_symbols, get_project_root
@@ -25,6 +25,7 @@ from src.utils.helpers import (
     temporal_split_with_embargo,
     train_and_evaluate,
 )
+
 
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
@@ -65,12 +66,21 @@ def optimize_strategy(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
         df = df_raw.copy()
 
         compute_target(df, swing_days=sw, atr_tp_multi=tp_m, atr_sl_multi=sl_m)
+
+        # Save price data used for realistic return calculations BEFORE
+        # cleanup_columns() removes 'close'. 'atr_14' is also excluded from
+        # XGBoost features by some strategies, so we carry it here explicitly.
+        prices_pre = df[["close", "atr_14"]].copy()
+
         cleanup_columns(df)
 
         df_train, df_val, df_test = temporal_split_with_embargo(df)
         y_train = df_train["target"]
         y_val = df_val["target"]
         y_test = df_test["target"]
+
+        # Align price data to the validation split (same index, no leakage)
+        prices_val = prices_pre.loc[df_val.index]
 
         recent_mask = pd.Series(False, index=y_test.index)
         if len(recent_mask) > 0:
@@ -96,6 +106,7 @@ def optimize_strategy(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
                 y_test,
                 tp_val=tp_m,
                 sl_val=sl_m,
+                prices_val=prices_val,
             )
 
             recent_signals = int(((preds_test == 1) & recent_mask.values).sum())
@@ -110,6 +121,10 @@ def optimize_strategy(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
                     "atr_sl_multi": float(sl_m),
                     "swing_period": int(sw),
                     "net_profit": metrics["net_profit_pct"],
+                    "fitness_score": metrics["fitness_score"],
+                    "profit_factor": metrics["profit_factor"],
+                    "max_drawdown": metrics["max_drawdown"],
+                    "trade_count": metrics["trade_count"],
                     "recent_signals": recent_signals,
                 }
             )
@@ -119,7 +134,7 @@ def optimize_strategy(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
 
     best_config = sorted(
         all_results,
-        key=lambda x: (x["net_profit"], x["recent_signals"]),
+        key=lambda x: x["fitness_score"],
         reverse=True,
     )[0]
 
@@ -137,6 +152,9 @@ def optimize_strategy(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
         "atr_tp_multi": best_config["atr_tp_multi"],
         "atr_sl_multi": best_config["atr_sl_multi"],
         "swing_period": best_config["swing_period"],
+        "profit_factor": best_config["profit_factor"],
+        "max_drawdown": best_config["max_drawdown"],
+        "trade_count": best_config["trade_count"],
         "last_trained": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
 
@@ -145,9 +163,9 @@ def optimize_strategy(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
 
     logger.info("Optimization completed for %s.", symbol)
     logger.info(
-        "Winner: %s | Profit (Val): %s",
+        "Winner: %s | Profit factor: %s",
         final_json["strategy_name"],
-        best_config["net_profit"],
+        best_config["profit_factor"],
     )
 
 
