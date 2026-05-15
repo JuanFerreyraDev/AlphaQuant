@@ -18,6 +18,7 @@ def _make_df() -> pd.DataFrame:
     n = 100
     return pd.DataFrame(
         {
+            "close": np.random.uniform(100, 200, n),
             "rsi_14": np.random.uniform(20, 80, n),
             "macd": np.random.randn(n),
             "macd_hist": np.random.randn(n),
@@ -121,7 +122,13 @@ class TestOptimizeStrategy:
 
         mock_model = MagicMock()
         preds_test = np.array([0, 1, 0, 1, 0, 1, 0, 1, 0, 1])
-        metrics = {"net_profit_pct": 5.0}
+        metrics = {
+            "net_profit_pct": 5.0,
+            "fitness_score": 3.5,
+            "profit_factor": 2.1,
+            "max_drawdown": 0.12,
+            "trade_count": 10,
+        }
         mock_train.return_value = (mock_model, metrics, preds_test, [], 0.65)
 
         optimize_strategy("BTC_USDT")
@@ -134,6 +141,9 @@ class TestOptimizeStrategy:
         assert "features" in config
         assert "optimal_threshold" in config
         assert "last_trained" in config
+        assert "profit_factor" in config
+        assert "max_drawdown" in config
+        assert "trade_count" in config
 
     @patch("src.brain.strategy_optimizer.get_project_root")
     @patch("src.brain.strategy_optimizer.train_and_evaluate")
@@ -224,13 +234,37 @@ class TestOptimizeStrategy:
 
         # The optimizer iterates over SWING_RANGE × ATR_TP_RANGE × ATR_SL_RANGE combos (36),
         # each time calling train_and_evaluate for each strategy (2).
-        # Return low profit for "Low" and high profit for "High" on every call.
+        # Return low fitness for "Low" and high fitness for "High" on every call.
         def _side_effect(*args, **kwargs):
-            # We can detect which strategy by the X_train columns
+            # Detect which strategy by the X_train columns
             X_train = args[0]
             if "macd" in X_train.columns:
-                return (MagicMock(), {"net_profit_pct": 10.0}, preds, [], 0.70)
-            return (MagicMock(), {"net_profit_pct": 1.0}, preds, [], 0.60)
+                return (
+                    MagicMock(),
+                    {
+                        "net_profit_pct": 10.0,
+                        "fitness_score": 5.0,
+                        "profit_factor": 3.0,
+                        "max_drawdown": 0.10,
+                        "trade_count": 15,
+                    },
+                    preds,
+                    [],
+                    0.70,
+                )
+            return (
+                MagicMock(),
+                {
+                    "net_profit_pct": 1.0,
+                    "fitness_score": 0.5,
+                    "profit_factor": 1.1,
+                    "max_drawdown": 0.40,
+                    "trade_count": 6,
+                },
+                preds,
+                [],
+                0.60,
+            )
 
         mock_train.side_effect = _side_effect
 
