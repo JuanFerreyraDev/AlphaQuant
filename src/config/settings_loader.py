@@ -270,6 +270,24 @@ def get_market_config(market: str = "futures") -> dict[str, Any]:
     return settings.get(market, {})
 
 
+def get_trading_settings() -> dict[str, float]:
+    """Return trading execution settings (fee_rate, slippage) from settings.yaml.
+
+    Reads directly from the YAML defaults so that values are available
+    before ``bot_state.json`` is initialised.  Falls back to safe defaults
+    if the ``trading`` section is absent.
+
+    Returns:
+        Dictionary with ``fee_rate`` and ``slippage`` keys.
+    """
+    data = _load_yaml_defaults()
+    trading = data.get("trading", {})
+    return {
+        "fee_rate": float(trading.get("fee_rate", 0.001)),
+        "slippage": float(trading.get("slippage", 0.0005)),
+    }
+
+
 def get_project_root() -> Path:
     """Return the absolute path to the AlphaQuant project root.
 

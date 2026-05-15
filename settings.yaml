@@ -11,3 +11,6 @@ futures:
 spot:
   symbols:
   - BTC_USDT
+trading:
+  fee_rate: 0.001
+  slippage: 0.0005
