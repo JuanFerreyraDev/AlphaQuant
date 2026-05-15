@@ -14,6 +14,7 @@ from src.config.settings_loader import (
     get_config,
     get_market_config,
     get_project_root,
+    get_trading_settings,
     load_bot_state,
     load_settings,
     save_bot_state,
@@ -389,6 +390,39 @@ class TestGetMarketConfig:
             with patch("src.config.settings_loader.load_bot_state", return_value=state):
                 cfg = get_market_config("futures")
                 assert cfg["default_leverage"] == 5
+
+
+class TestGetTradingSettings:
+    """Tests for get_trading_settings()."""
+
+    def test_loads_fee_rate_and_slippage_from_yaml(self) -> None:
+        """Reads custom fee_rate and slippage from the trading section."""
+        yaml_data = {"trading": {"fee_rate": 0.002, "slippage": 0.001}}
+        with patch(
+            "src.config.settings_loader._load_yaml_defaults", return_value=yaml_data
+        ):
+            result = get_trading_settings()
+        assert result["fee_rate"] == 0.002
+        assert result["slippage"] == 0.001
+
+    def test_uses_defaults_when_keys_missing(self) -> None:
+        """Missing keys inside trading section fall back to defaults."""
+        with patch(
+            "src.config.settings_loader._load_yaml_defaults",
+            return_value={"trading": {}},
+        ):
+            result = get_trading_settings()
+        assert result["fee_rate"] == 0.001
+        assert result["slippage"] == 0.0005
+
+    def test_uses_defaults_when_section_absent(self) -> None:
+        """Absent trading section falls back to defaults entirely."""
+        with patch(
+            "src.config.settings_loader._load_yaml_defaults", return_value={}
+        ):
+            result = get_trading_settings()
+        assert result["fee_rate"] == 0.001
+        assert result["slippage"] == 0.0005
 
 
 class TestGetProjectRoot:
