@@ -13,6 +13,7 @@ from src.utils.helpers import (
     cleanup_columns,
     compute_target,
     find_optimal_threshold,
+    fitness_score,
     load_csv_data,
     temporal_split_with_embargo,
     train_and_evaluate,
@@ -126,6 +127,103 @@ class TestComputeTargetEdgeCases:
 
         assert "target" in result.columns
 
+    def test_lower_tf_df_determines_tp_sl_order(self) -> None:
+        """lower_tf_df walks bars chronologically and fires TP before SL."""
+        dates = pd.date_range("2023-01-01", periods=10, freq="D")
+        df = pd.DataFrame(
+            {
+                "close": [100.0] * 10,
+                "high": [101.0] * 10,   # daily high never reaches tp_price=110
+                "low": [99.0] * 10,
+                "atr_14": [10.0] * 10,
+            },
+            index=dates,
+        )
+        # Window for row 0 (2023-01-01): 2023-01-02 to 2023-01-06
+        # First bar: low=98 does NOT hit sl_price=90, high=115 hits tp_price=110 → TP fires
+        # Second bar would hit SL, but we already exited
+        lower_tf = pd.DataFrame(
+            {"high": [115.0, 80.0], "low": [98.0, 75.0]},
+            index=pd.to_datetime(["2023-01-02 00:00", "2023-01-02 01:00"]),
+        )
+
+        result = compute_target(
+            df, swing_days=5, atr_tp_multi=1.0, atr_sl_multi=1.0,
+            lower_tf_df=lower_tf,
+        )
+
+        # Daily fallback would give target=0 (daily high 101 < tp_price 110)
+        # lower_tf correctly resolves target=1 for row 0
+        assert result["target"].iloc[0] == 1
+
+    def test_lower_tf_pessimistic_intrabar_sl_beats_tp(self) -> None:
+        """If a single bar touches both SL and TP, SL is assumed to fire first."""
+        dates = pd.date_range("2023-01-01", periods=5, freq="D")
+        df = pd.DataFrame(
+            {
+                "close": [100.0] * 5,
+                "high": [101.0] * 5,
+                "low": [99.0] * 5,
+                "atr_14": [10.0] * 5,
+            },
+            index=dates,
+        )
+        # tp_price = 100 + 10*1.0 = 110, sl_price = 100 - 10*1.0 = 90
+        # This bar touches BOTH levels (high >= tp AND low <= sl)
+        lower_tf = pd.DataFrame(
+            {"high": [115.0], "low": [85.0]},
+            index=pd.to_datetime(["2023-01-02 00:00"]),
+        )
+
+        result = compute_target(
+            df, swing_days=3, atr_tp_multi=1.0, atr_sl_multi=1.0,
+            lower_tf_df=lower_tf,
+        )
+
+        # Pessimistic rule: SL checked first → target must be 0
+        assert result["target"].iloc[0] == 0
+
+    def test_lower_tf_df_does_not_add_extra_columns(self) -> None:
+        """lower_tf path must NOT add max_high_future or min_low_future to df."""
+        dates = pd.date_range("2023-01-01", periods=5, freq="D")
+        df = pd.DataFrame(
+            {
+                "close": [100.0] * 5,
+                "high": [101.0] * 5,
+                "low": [99.0] * 5,
+                "atr_14": [10.0] * 5,
+            },
+            index=dates,
+        )
+        lower_tf = pd.DataFrame(
+            {"high": [115.0], "low": [98.0]},
+            index=pd.to_datetime(["2023-01-02 00:00"]),
+        )
+
+        compute_target(df, swing_days=3, atr_tp_multi=1.0, atr_sl_multi=1.0, lower_tf_df=lower_tf)
+
+        assert "max_high_future" not in df.columns
+        assert "min_low_future" not in df.columns
+
+    def test_lower_tf_df_raises_on_missing_columns(self) -> None:
+        """lower_tf_df without high/low raises a ValueError."""
+        dates = pd.date_range("2023-01-01", periods=5, freq="D")
+        df = pd.DataFrame(
+            {
+                "close": [100.0] * 5,
+                "high": [101.0] * 5,
+                "low": [99.0] * 5,
+                "atr_14": [10.0] * 5,
+            },
+            index=dates,
+        )
+        bad_ltf = pd.DataFrame(
+            {"open": [100.0]}, index=[pd.Timestamp("2023-01-02")]
+        )
+
+        with pytest.raises(ValueError, match="missing required columns"):
+            compute_target(df, swing_days=3, lower_tf_df=bad_ltf)
+
 
 class TestCleanupColumns:
     def test_drops_ohlcv_and_auxiliary_columns(self) -> None:
@@ -185,14 +283,19 @@ class TestFindOptimalThreshold:
         mock_model.predict_proba.return_value = np.array([[0.95, 0.05]] * 20)
         X_val = pd.DataFrame({"f1": range(20)})
         y_val = pd.Series([0] * 20)
+        prices_val = pd.DataFrame(
+            {"close": [100.0] * 20, "atr_14": [5.0] * 20}, index=range(20)
+        )
 
-        threshold, profit = find_optimal_threshold(mock_model, X_val, y_val, 2.0, 1.0)
+        threshold, profit = find_optimal_threshold(
+            mock_model, X_val, y_val, 2.0, 1.0, prices_val, 0.001, 0.0005
+        )
 
         assert threshold == 0.65
         assert profit == 0.0
 
     def test_picks_best_profit_threshold(self) -> None:
-        """Selects the threshold with the highest net profit."""
+        """Selects the threshold with the highest net return."""
         mock_model = MagicMock()
         probas = np.column_stack(
             [
@@ -203,11 +306,100 @@ class TestFindOptimalThreshold:
         mock_model.predict_proba.return_value = probas
         X_val = pd.DataFrame({"f1": range(50)})
         y_val = pd.Series([1] * 30 + [0] * 20)
+        prices_val = pd.DataFrame(
+            {"close": [100.0] * 50, "atr_14": [5.0] * 50}, index=range(50)
+        )
 
-        threshold, profit = find_optimal_threshold(mock_model, X_val, y_val, 2.0, 1.0)
+        threshold, profit = find_optimal_threshold(
+            mock_model, X_val, y_val, 2.0, 1.0, prices_val, 0.001, 0.0005
+        )
 
         assert 0.50 <= threshold < 0.85
         assert profit > 0
+
+
+class TestFitnessScore:
+    """Tests for fitness_score() — validates all three scoring scenarios."""
+
+    def _make_model(self, n: int, all_fire: bool = True) -> MagicMock:
+        """Return a mock model whose probas always exceed any threshold."""
+        model = MagicMock()
+        high = np.column_stack([np.zeros(n), np.ones(n)])
+        low = np.column_stack([np.ones(n), np.zeros(n)])
+        model.predict_proba.return_value = high if all_fire else low
+        return model
+
+    def test_healthy_model_returns_positive_score(self) -> None:
+        """PF > 1.0 and ≥5 trades → positive score with profit_factor > 1.0."""
+        n = 20
+        model = self._make_model(n)
+        X_val = pd.DataFrame({"f1": range(n)})
+        # 15 wins, 5 losses
+        y_val = pd.Series([1] * 15 + [0] * 5, index=range(n))
+        prices_val = pd.DataFrame(
+            {"close": [100.0] * n, "atr_14": [5.0] * n}, index=range(n)
+        )
+
+        score, metrics = fitness_score(
+            model, X_val, y_val, prices_val,
+            tp_val=2.0, sl_val=1.0, fee_rate=0.001, slippage=0.0005, threshold=0.5,
+        )
+
+        assert score > 0
+        assert metrics["profit_factor"] > 1.0
+        assert metrics["trade_count"] == 20
+
+    def test_pf_below_one_returns_sentinel(self) -> None:
+        """PF ≤ 1.0 returns the sentinel -999.0 score."""
+        n = 20
+        model = self._make_model(n)
+        X_val = pd.DataFrame({"f1": range(n)})
+        # 4 wins, 16 losses → tiny tp=0.5 vs large sl=2.0 guarantees PF < 1
+        y_val = pd.Series([1] * 4 + [0] * 16, index=range(n))
+        prices_val = pd.DataFrame(
+            {"close": [100.0] * n, "atr_14": [1.0] * n}, index=range(n)
+        )
+
+        score, metrics = fitness_score(
+            model, X_val, y_val, prices_val,
+            tp_val=0.5, sl_val=2.0, fee_rate=0.001, slippage=0.0005, threshold=0.5,
+        )
+
+        assert score == -999.0
+        assert metrics["profit_factor"] <= 1.0
+
+    def test_low_trade_count_applies_half_penalty(self) -> None:
+        """trade_count < 5 applies a 0.5× penalty; score_8 / score_4 ≈ 2.0."""
+        # Setup: wins-first then losses, so MDD is the same proportion in both
+        # 4-trade scenario: 3 wins, 1 loss  (trade_count=4 → penalty=0.5)
+        model_4 = self._make_model(4)
+        X_4 = pd.DataFrame({"f1": range(4)})
+        y_4 = pd.Series([1, 1, 1, 0], index=range(4))
+        prices_4 = pd.DataFrame(
+            {"close": [100.0] * 4, "atr_14": [10.0] * 4}, index=range(4)
+        )
+        score_4, metrics_4 = fitness_score(
+            model_4, X_4, y_4, prices_4,
+            tp_val=2.0, sl_val=1.0, fee_rate=0.001, slippage=0.0005, threshold=0.5,
+        )
+
+        # 8-trade scenario: 6 wins, 2 losses (same 3:1 ratio → same PF and MDD)
+        model_8 = self._make_model(8)
+        X_8 = pd.DataFrame({"f1": range(8)})
+        y_8 = pd.Series([1, 1, 1, 0, 1, 1, 1, 0], index=range(8))
+        prices_8 = pd.DataFrame(
+            {"close": [100.0] * 8, "atr_14": [10.0] * 8}, index=range(8)
+        )
+        score_8, metrics_8 = fitness_score(
+            model_8, X_8, y_8, prices_8,
+            tp_val=2.0, sl_val=1.0, fee_rate=0.001, slippage=0.0005, threshold=0.5,
+        )
+
+        assert metrics_4["trade_count"] == 4
+        assert metrics_8["trade_count"] == 8
+        assert score_4 > 0  # PF > 1 so penalty doesn't eliminate the score
+        # Same PF and MDD but trade_count=4 gets 0.5× and trade_count=8 gets 1.0×
+        assert pytest.approx(score_8 / score_4, rel=0.01) == 2.0
 
 
 class TestBuildStrategies:
@@ -283,16 +475,26 @@ class TestTrainAndEvaluate:
         y_train = df["target"].iloc[:split]
         y_val = df["target"].iloc[split:val_split]
         y_test = df["target"].iloc[val_split:]
+        prices_val = df[["close", "atr_14"]].iloc[split:val_split]
 
-        result = train_and_evaluate(
-            X_train, X_val, X_test, y_train, y_val, y_test, tp_val=2.0, sl_val=1.0
-        )
+        with patch(
+            "src.utils.helpers.get_trading_settings",
+            return_value={"fee_rate": 0.001, "slippage": 0.0005},
+        ):
+            result = train_and_evaluate(
+                X_train, X_val, X_test, y_train, y_val, y_test,
+                tp_val=2.0, sl_val=1.0, prices_val=prices_val,
+            )
 
         assert len(result) == 5
         model, metrics, preds_test, buy_dates, threshold = result
         assert hasattr(model, "predict_proba")
         assert isinstance(metrics, dict)
         assert "net_profit_pct" in metrics
+        assert "fitness_score" in metrics
+        assert "profit_factor" in metrics
+        assert "max_drawdown" in metrics
+        assert "trade_count" in metrics
         assert isinstance(preds_test, np.ndarray)
         assert isinstance(threshold, float)
 
@@ -314,8 +516,14 @@ class TestTrainAndEvaluate:
         y_train = df["target"].iloc[:split]
         y_val = df["target"].iloc[split:val_split]
         y_test = df["target"].iloc[val_split:]
+        prices_val = df[["close", "atr_14"]].iloc[split:val_split]
 
-        result = train_and_evaluate(
-            X_train, X_val, X_test, y_train, y_val, y_test, tp_val=2.0, sl_val=1.0
-        )
+        with patch(
+            "src.utils.helpers.get_trading_settings",
+            return_value={"fee_rate": 0.001, "slippage": 0.0005},
+        ):
+            result = train_and_evaluate(
+                X_train, X_val, X_test, y_train, y_val, y_test,
+                tp_val=2.0, sl_val=1.0, prices_val=prices_val,
+            )
         assert result is not None
