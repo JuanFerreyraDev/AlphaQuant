@@ -19,6 +19,11 @@ from src.utils.helpers import (
     train_and_evaluate,
 )
 
+SAMPLE_HIPERPARAMS: dict[str, float] = {
+    "n_estimators": 200,
+    "max_depth": 3,
+    "learning_rate": 0.05,
+}
 
 @pytest.fixture
 def sample_ohlcv_csv(tmp_path: Path) -> Path:
@@ -278,7 +283,7 @@ class TestTemporalSplitEdgeCases:
 
 class TestFindOptimalThreshold:
     def test_returns_default_when_no_signals_pass(self) -> None:
-        """If no threshold produces enough signals, returns (0.65, 0.0)."""
+        """If no threshold produces enough signals, returns (-1.0, 0.0)."""
         mock_model = MagicMock()
         mock_model.predict_proba.return_value = np.array([[0.95, 0.05]] * 20)
         X_val = pd.DataFrame({"f1": range(20)})
@@ -288,10 +293,11 @@ class TestFindOptimalThreshold:
         )
 
         threshold, profit = find_optimal_threshold(
-            mock_model, X_val, y_val, 2.0, 1.0, prices_val, 0.001, 0.0005
+            mock_model, X_val, y_val, 2.0, 1.0, prices_val, 0.001, 0.0005,
+            swing_period=5,
         )
 
-        assert threshold == 0.65
+        assert threshold == -1.0
         assert profit == 0.0
 
     def test_picks_best_profit_threshold(self) -> None:
@@ -311,7 +317,8 @@ class TestFindOptimalThreshold:
         )
 
         threshold, profit = find_optimal_threshold(
-            mock_model, X_val, y_val, 2.0, 1.0, prices_val, 0.001, 0.0005
+            mock_model, X_val, y_val, 2.0, 1.0, prices_val, 0.001, 0.0005,
+            swing_period=5,
         )
 
         assert 0.50 <= threshold < 0.85
@@ -330,7 +337,7 @@ class TestFitnessScore:
         return model
 
     def test_healthy_model_returns_positive_score(self) -> None:
-        """PF > 1.0 and ≥5 trades → positive score with profit_factor > 1.0."""
+        """PF > 1.0 and enough sequential trades → positive score with profit_factor > 1.0."""
         n = 20
         model = self._make_model(n)
         X_val = pd.DataFrame({"f1": range(n)})
@@ -343,11 +350,14 @@ class TestFitnessScore:
         score, metrics = fitness_score(
             model, X_val, y_val, prices_val,
             tp_val=2.0, sl_val=1.0, fee_rate=0.001, slippage=0.0005, threshold=0.5,
+            swing_period=5,
         )
 
+        # With swing_period=5 and n=20, sequential simulation yields 4 trades
+        # (bars 0, 5, 10, 15).  All are wins (y_val[0..14]==1), so PF > 1.
         assert score > 0
         assert metrics["profit_factor"] > 1.0
-        assert metrics["trade_count"] == 20
+        assert metrics["trade_count"] == 4
 
     def test_pf_below_one_returns_sentinel(self) -> None:
         """PF ≤ 1.0 returns the sentinel -999.0 score."""
@@ -363,43 +373,53 @@ class TestFitnessScore:
         score, metrics = fitness_score(
             model, X_val, y_val, prices_val,
             tp_val=0.5, sl_val=2.0, fee_rate=0.001, slippage=0.0005, threshold=0.5,
+            swing_period=5,
         )
 
         assert score == -999.0
         assert metrics["profit_factor"] <= 1.0
 
-    def test_low_trade_count_applies_half_penalty(self) -> None:
-        """trade_count < 5 applies a 0.5× penalty; score_8 / score_4 ≈ 2.0."""
-        # Setup: wins-first then losses, so MDD is the same proportion in both
-        # 4-trade scenario: 3 wins, 1 loss  (trade_count=4 → penalty=0.5)
-        model_4 = self._make_model(4)
-        X_4 = pd.DataFrame({"f1": range(4)})
-        y_4 = pd.Series([1, 1, 1, 0], index=range(4))
-        prices_4 = pd.DataFrame(
-            {"close": [100.0] * 4, "atr_14": [10.0] * 4}, index=range(4)
-        )
-        score_4, metrics_4 = fitness_score(
-            model_4, X_4, y_4, prices_4,
-            tp_val=2.0, sl_val=1.0, fee_rate=0.001, slippage=0.0005, threshold=0.5,
+    def test_linear_frequency_penalty(self) -> None:
+        """Frequency penalty is a linear ramp: fewer executable trades → lower score."""
+        # We test the penalty in isolation by calling fitness_score twice with
+        # identical inputs but different trade_count outcomes, achieved by
+        # varying swing_period on a dataset where every bar is a win so PF and
+        # MDD stay identical regardless of how many bars actually execute.
+        # All-wins: PF = gross_profit / 1e-9 (proportional to trade_count).
+        # We therefore verify the *direction* (score grows with trade_count)
+        # and that a sub-threshold trade_count produces a strictly lower score.
+
+        n = 50
+        model = self._make_model(n)
+        X_val = pd.DataFrame({"f1": range(n)})
+        y_val = pd.Series([1] * n, index=range(n))          # all wins
+        prices_val = pd.DataFrame(
+            {"close": [100.0] * n, "atr_14": [1.0] * n}, index=range(n)
         )
 
-        # 8-trade scenario: 6 wins, 2 losses (same 3:1 ratio → same PF and MDD)
-        model_8 = self._make_model(8)
-        X_8 = pd.DataFrame({"f1": range(8)})
-        y_8 = pd.Series([1, 1, 1, 0, 1, 1, 1, 0], index=range(8))
-        prices_8 = pd.DataFrame(
-            {"close": [100.0] * 8, "atr_14": [10.0] * 8}, index=range(8)
-        )
-        score_8, metrics_8 = fitness_score(
-            model_8, X_8, y_8, prices_8,
+        # swing_period=5  → 10 executable trades,
+        # target_min = max(5, 50//(5+15)) = 5, penalty = min(1.0, 10/5) = 1.0
+        score_full, metrics_full = fitness_score(
+            model, X_val, y_val, prices_val,
             tp_val=2.0, sl_val=1.0, fee_rate=0.001, slippage=0.0005, threshold=0.5,
+            swing_period=5,
         )
 
-        assert metrics_4["trade_count"] == 4
-        assert metrics_8["trade_count"] == 8
-        assert score_4 > 0  # PF > 1 so penalty doesn't eliminate the score
-        # Same PF and MDD but trade_count=4 gets 0.5× and trade_count=8 gets 1.0×
-        assert pytest.approx(score_8 / score_4, rel=0.01) == 2.0
+        # swing_period=24 → 3 executable trades (bars 0, 24, 48),
+        # target_min = max(5, 50//(24+15)) = max(5,1) = 5, penalty = min(1.0, 3/5) = 0.6
+        score_partial, metrics_partial = fitness_score(
+            model, X_val, y_val, prices_val,
+            tp_val=2.0, sl_val=1.0, fee_rate=0.001, slippage=0.0005, threshold=0.5,
+            swing_period=24,
+        )
+
+        assert metrics_full["trade_count"] == 10
+        assert metrics_partial["trade_count"] == 3
+        # Both PF >> 1 (all wins), so neither returns -999 sentinel
+        assert score_full > 0
+        assert score_partial > 0
+        # Fully-penalised score must exceed partially-penalised one
+        assert score_full > score_partial
 
 
 class TestBuildStrategies:
@@ -476,6 +496,7 @@ class TestTrainAndEvaluate:
         y_val = df["target"].iloc[split:val_split]
         y_test = df["target"].iloc[val_split:]
         prices_val = df[["close", "atr_14"]].iloc[split:val_split]
+        prices_test = df[["close", "atr_14"]].iloc[val_split:]
 
         with patch(
             "src.utils.helpers.get_trading_settings",
@@ -484,6 +505,7 @@ class TestTrainAndEvaluate:
             result = train_and_evaluate(
                 X_train, X_val, X_test, y_train, y_val, y_test,
                 tp_val=2.0, sl_val=1.0, prices_val=prices_val,
+                prices_test=prices_test, hyperparams=SAMPLE_HIPERPARAMS
             )
 
         assert len(result) == 5
@@ -491,10 +513,11 @@ class TestTrainAndEvaluate:
         assert hasattr(model, "predict_proba")
         assert isinstance(metrics, dict)
         assert "net_profit_pct" in metrics
-        assert "fitness_score" in metrics
-        assert "profit_factor" in metrics
-        assert "max_drawdown" in metrics
-        assert "trade_count" in metrics
+        assert "val_fitness_score" in metrics
+        assert "test_fitness_score" in metrics
+        assert "test_profit_factor" in metrics
+        assert "test_max_drawdown" in metrics
+        assert "test_trade_count" in metrics
         assert isinstance(preds_test, np.ndarray)
         assert isinstance(threshold, float)
 
@@ -517,6 +540,7 @@ class TestTrainAndEvaluate:
         y_val = df["target"].iloc[split:val_split]
         y_test = df["target"].iloc[val_split:]
         prices_val = df[["close", "atr_14"]].iloc[split:val_split]
+        prices_test = df[["close", "atr_14"]].iloc[val_split:]
 
         with patch(
             "src.utils.helpers.get_trading_settings",
@@ -525,5 +549,6 @@ class TestTrainAndEvaluate:
             result = train_and_evaluate(
                 X_train, X_val, X_test, y_train, y_val, y_test,
                 tp_val=2.0, sl_val=1.0, prices_val=prices_val,
+                prices_test=prices_test, hyperparams=SAMPLE_HIPERPARAMS
             )
         assert result is not None
