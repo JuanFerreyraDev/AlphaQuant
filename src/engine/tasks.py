@@ -80,18 +80,23 @@ def run_full_training_pipeline(symbol: str) -> tuple[bool, str, str]:
     if not needs_training:
         logger.info("[Pipeline] Skipping %s: %s", safe_symbol, reason)
         return needs_training, safe_symbol, reason
-    logger.info("[Pipeline] Step 1/3: Downloading data for %s...", safe_symbol)
-    fetch_historical_data(safe_symbol)
+    try:
+        logger.info("[Pipeline] Starting full training pipeline for %s...", safe_symbol)
+        logger.info("[Pipeline] Step 1/3: Downloading data for %s...", safe_symbol)
+        fetch_historical_data(safe_symbol)
 
-    df_fg = get_fear_and_greed()
+        df_fg = get_fear_and_greed()
 
-    logger.info("[Pipeline] Step 2/3: Optimizing strategy for %s...", safe_symbol)
-    optimize_strategy(safe_symbol, df_fg)
+        logger.info("[Pipeline] Step 2/3: Optimizing strategy for %s...", safe_symbol)
+        optimize_strategy(safe_symbol, df_fg)
 
-    logger.info("[Pipeline] Step 3/3: Training model for %s...", safe_symbol)
-    train_factory(safe_symbol, df_fg)
+        logger.info("[Pipeline] Step 3/3: Training model for %s...", safe_symbol)
+        train_factory(safe_symbol, df_fg)
 
-    logger.info("[Pipeline] Pipeline complete for %s.", safe_symbol)
+        logger.info("[Pipeline] Pipeline complete for %s.", safe_symbol)
+    except RuntimeError as exc:
+        logger.error("[Pipeline] Error during training pipeline for %s: %s", safe_symbol, exc)
+        return False, safe_symbol, str(exc)
 
     return needs_training, safe_symbol, ""
 
