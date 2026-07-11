@@ -130,6 +130,7 @@ def add_sentiment(df: pd.DataFrame, df_fg: pd.DataFrame) -> tuple[pd.DataFrame, 
         Tuple ``(df, has_sentiment)`` indicating whether sentiment was added.
     """
     if not df_fg.empty:
+        df_fg = df_fg[~df_fg.index.duplicated(keep="last")]
         df = df.join(df_fg, how="left")
         df["fng_sma_14"] = df["fng_value"].rolling(14).mean()
         df["fng_vol_14"] = df["fng_value"].rolling(14).std()
