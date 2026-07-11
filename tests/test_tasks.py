@@ -560,14 +560,17 @@ class TestRunFullTrainingPipeline:
         side_effect=RuntimeError("download failed"),
     )
     @patch("src.engine.tasks._check_training_freshness", return_value=(True, ""))
-    def test_propagates_fetch_error(
+    def test_returns_error_on_fetch_failure(
         self,
         _mock_freshness: MagicMock,
         _mock: MagicMock,
     ) -> None:
-        """Error in fetch_historical_data propagates as RuntimeError."""
-        with pytest.raises(RuntimeError, match="download failed"):
-            run_full_training_pipeline("BTC_USDT")
+        """Error in fetch_historical_data is captured and returned in reason."""
+        trained, safe_symbol, reason = run_full_training_pipeline("BTC_USDT")
+
+        assert trained is False
+        assert safe_symbol == "BTC_USDT"
+        assert reason == "download failed"
 
     @patch(
         "src.engine.tasks.optimize_strategy",
@@ -576,16 +579,19 @@ class TestRunFullTrainingPipeline:
     @patch("src.engine.tasks.get_fear_and_greed", return_value=pd.DataFrame())
     @patch("src.engine.tasks.fetch_historical_data")
     @patch("src.engine.tasks._check_training_freshness", return_value=(True, ""))
-    def test_propagates_optimize_error(
+    def test_returns_error_on_optimize_failure(
         self,
         _mock_freshness: MagicMock,
         _mock_fetch: MagicMock,
         _mock_fg: MagicMock,
         _mock_opt: MagicMock,
     ) -> None:
-        """Error in optimize_strategy propagates."""
-        with pytest.raises(RuntimeError, match="optimization failed"):
-            run_full_training_pipeline("BTC_USDT")
+        """Error in optimize_strategy is captured and returned in reason."""
+        trained, safe_symbol, reason = run_full_training_pipeline("BTC_USDT")
+
+        assert trained is False
+        assert safe_symbol == "BTC_USDT"
+        assert reason == "optimization failed"
 
     @patch(
         "src.engine.tasks.train_factory", side_effect=RuntimeError("training failed")
@@ -594,7 +600,7 @@ class TestRunFullTrainingPipeline:
     @patch("src.engine.tasks.get_fear_and_greed", return_value=pd.DataFrame())
     @patch("src.engine.tasks.fetch_historical_data")
     @patch("src.engine.tasks._check_training_freshness", return_value=(True, ""))
-    def test_propagates_train_error(
+    def test_returns_error_on_train_failure(
         self,
         _mock_freshness: MagicMock,
         _mock_fetch: MagicMock,
@@ -602,9 +608,12 @@ class TestRunFullTrainingPipeline:
         _mock_opt: MagicMock,
         _mock_train: MagicMock,
     ) -> None:
-        """Error in train_factory propagates."""
-        with pytest.raises(RuntimeError, match="training failed"):
-            run_full_training_pipeline("BTC_USDT")
+        """Error in train_factory is captured and returned in reason."""
+        trained, safe_symbol, reason = run_full_training_pipeline("BTC_USDT")
+
+        assert trained is False
+        assert safe_symbol == "BTC_USDT"
+        assert reason == "training failed"
 
     @patch("src.engine.tasks.train_factory")
     @patch("src.engine.tasks.optimize_strategy")
