@@ -127,7 +127,7 @@ class TestOptimizeStrategy:
         }
         mock_train.return_value = (mock_model, metrics, preds_test, [], 0.65)
 
-        optimize_strategy("BTC_USDT")
+        optimize_strategy("BTC_USDT", audit=True)
 
         config_path = tmp_path / "data" / "models" / "BTC_USDT" / "config.json"
         assert config_path.exists()
@@ -264,7 +264,7 @@ class TestOptimizeStrategy:
 
         mock_train.side_effect = _side_effect
 
-        optimize_strategy("BTC_USDT")
+        optimize_strategy("BTC_USDT", audit=True)
 
         config_path = tmp_path / "data" / "models" / "BTC_USDT" / "config.json"
         with config_path.open("r") as fh:
