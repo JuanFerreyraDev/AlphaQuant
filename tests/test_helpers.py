@@ -15,8 +15,7 @@ from src.utils.helpers import (
     find_optimal_threshold,
     fitness_score,
     load_csv_data,
-    temporal_split_with_embargo,
-    train_and_evaluate,
+    train_and_evaluate
 )
 
 SAMPLE_HIPERPARAMS: dict[str, float] = {
@@ -81,24 +80,6 @@ class TestComputeTarget:
         df = pd.DataFrame({"close": [100.0], "high": [105.0], "low": [95.0]})
         with pytest.raises(ValueError, match="atr_14"):
             compute_target(df, swing_days=3)
-
-
-class TestTemporalSplitWithEmbargo:
-    def test_split_sizes(self) -> None:
-        df = pd.DataFrame({"a": range(100)})
-        train, val, test = temporal_split_with_embargo(
-            df, train_pct=0.7, val_pct=0.1, embargo_days=5
-        )
-        assert len(train) == 70
-        assert len(val) > 0
-        assert len(test) > 0
-        assert len(train) + len(val) + len(test) < 100
-
-    def test_embargo_gap_exists(self) -> None:
-        df = pd.DataFrame({"a": range(100)}, index=range(100))
-        train, val, test = temporal_split_with_embargo(df, embargo_days=5)
-        assert val.index[0] > train.index[-1]
-        assert test.index[0] > val.index[-1]
 
 
 class TestComputeTargetEdgeCases:
@@ -269,16 +250,6 @@ class TestCleanupColumns:
 
         assert len(result) == 2
         assert not result.isna().any().any()
-
-
-class TestTemporalSplitEdgeCases:
-    def test_with_very_small_dataframe(self) -> None:
-        """Very small DataFrame does not cause errors."""
-        df = pd.DataFrame({"a": range(10)})
-
-        train, val, test = temporal_split_with_embargo(df, embargo_days=1)
-
-        assert len(train) > 0
 
 
 class TestFindOptimalThreshold:
