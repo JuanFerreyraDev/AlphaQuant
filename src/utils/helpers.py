@@ -9,6 +9,7 @@ import math
 from typing import Any, Optional
 
 import numpy as np
+from numba import njit
 import pandas as pd
 import xgboost as xgb
 from sklearn.metrics import precision_score
@@ -20,6 +21,269 @@ logger = logging.getLogger(__name__)
 
 # --- CONSTANTS ---
 SENTIMENT_COLS: list[str] = ["fng_value", "fng_sma_14", "fng_vol_14"]
+
+
+@njit
+def _resolve_targets_numba(
+    daily_times: np.ndarray,
+    tp_prices: np.ndarray,
+    sl_prices: np.ndarray,
+    ltf_times: np.ndarray,
+    ltf_highs: np.ndarray,
+    ltf_lows: np.ndarray,
+    ns_1_day: int,
+    ns_swing: int
+) -> np.ndarray:
+    """Numba JIT core: Linear scan (Two-Pointer) inside the window.
+
+    Args:
+        daily_times: Daily times array.
+        tp_prices: Take profit prices array.
+        sl_prices: Stop loss prices array.
+        ltf_times: Lower timeframe times array.
+        ltf_highs: Lower timeframe highs array.
+        ltf_lows: Lower timeframe lows array.
+        ns_1_day: Number of seconds in 1 day.
+        ns_swing: Number of seconds in the swing period.
+
+    Returns:
+        Array of targets.
+    """
+    n_daily = len(daily_times)
+    n_ltf = len(ltf_times)
+    targets = np.zeros(n_daily, dtype=np.int32)
+    
+    ltf_idx = 0
+    
+    for i in range(n_daily):
+        window_start = daily_times[i] + ns_1_day
+        window_end = daily_times[i] + ns_swing
+        
+        while ltf_idx < n_ltf and ltf_times[ltf_idx] < window_start:
+            ltf_idx += 1
+        
+        j = ltf_idx
+        label = 0 
+        while j < n_ltf and ltf_times[j] <= window_end:
+            if ltf_lows[j] <= sl_prices[i]:
+                label = 0
+                break
+            if ltf_highs[j] >= tp_prices[i]:
+                label = 1
+                break
+            j += 1
+            
+        targets[i] = label
+        
+    return targets
+
+
+@njit
+def _compute_threshold_loop(
+    proba: np.ndarray,
+    y_arr: np.ndarray,
+    atr: np.ndarray,
+    close: np.ndarray,
+    tp_val: float,
+    sl_val: float,
+    cost_per_trade: float,
+    swing_period: int,
+    n: int,
+    min_trades: int
+) -> tuple[float, float]:
+    """
+    Mathematical core compiled in C for maximum speed.
+
+    Args:
+        proba: Probability of the trade.
+        y_arr: Target array.
+        atr: ATR array.
+        close: Close price array.
+        tp_val: Take profit value.
+        sl_val: Stop loss value.
+        cost_per_trade: Cost per trade.
+        swing_period: Swing period.
+        n: Number of trades.
+        min_trades: Minimum trades.
+
+    Returns:
+        Tuple of best threshold and best profit.
+    """
+    best_threshold = 0.50
+    best_profit = -np.inf
+
+    thresholds = np.arange(0.50, 0.85, 0.01)
+
+    for thresh in thresholds:
+        profit = 0.0
+        trade_count = 0
+        i = 0
+        while i < n:
+            if proba[i] >= thresh:
+                if y_arr[i] == 1:
+                    profit += (atr[i] * tp_val) / close[i] - cost_per_trade
+                else:
+                    profit -= (atr[i] * sl_val) / close[i] + cost_per_trade
+                trade_count += 1
+                i += swing_period
+            else:
+                i += 1
+
+        if trade_count < min_trades:
+            continue
+
+        if profit > best_profit:
+            best_profit = profit
+            best_threshold = thresh
+
+    return best_threshold, best_profit
+
+
+@njit
+def _simulate_fitness_sequential(
+    proba: np.ndarray,
+    y_arr: np.ndarray,
+    atr: np.ndarray,
+    close: np.ndarray,
+    threshold: float,
+    tp_val: float,
+    sl_val: float,
+    cost_per_trade: float,
+    swing_period: int,
+    n: int
+) -> tuple[int, float, float, float]:
+    """Numba JIT core: Simulates trades and calculates the iterative MDD (O(1) memory).
+
+    Args:
+        proba: Probability of the trade.
+        y_arr: Target array.
+        atr: ATR array.
+        close: Close price array.
+        threshold: Threshold value.
+        tp_val: Take profit value.
+        sl_val: Stop loss value.
+        cost_per_trade: Cost per trade.
+        swing_period: Swing period.
+        n: Number of trades.
+
+    Returns:
+        Tuple of trade count, gross profit, gross loss, and max drawdown.
+    """
+    trade_count = 0
+    gross_profit = 0.0
+    gross_loss = 0.0
+    
+    account_equity = 1.0
+    running_max = 1.0
+    max_drawdown = 0.0
+    
+    i = 0
+    while i < n:
+        if proba[i] >= threshold:
+            if y_arr[i] == 1:
+                ret = (atr[i] * tp_val) / close[i] - cost_per_trade
+                gross_profit += ret
+            else:
+                ret = -((atr[i] * sl_val) / close[i]) - cost_per_trade
+                gross_loss += abs(ret)
+                
+            trade_count += 1
+            
+            account_equity *= (1.0 + ret)
+            if account_equity > running_max:
+                running_max = account_equity
+            
+            drawdown = (running_max - account_equity) / running_max
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+                
+            i += swing_period
+        else:
+            i += 1
+            
+    return trade_count, gross_profit, gross_loss, max_drawdown
+
+
+def _train_core(
+    X_train: pd.DataFrame,
+    X_val: pd.DataFrame,
+    y_train: pd.Series,
+    y_val: pd.Series,
+    tp_val: float,
+    sl_val: float,
+    prices_val: pd.DataFrame,
+    hyperparams: Optional[dict[str, Any]],
+    swing_period: int,
+    n_jobs: int = -1,
+) -> tuple[xgb.XGBClassifier, float, dict[str, Any]]:
+    """Train the model and compute validation-only metrics.
+
+    Shared core between `train_and_evaluate` (full, test-evaluating) and
+    `train_and_evaluate_val_only` (fast, val-only). Test set and X_live
+    are never touched here.
+
+    Args:
+        X_train: Training features.
+        X_val: Validation features.
+        y_train: Training target.
+        y_val: Validation target.
+        tp_val: ATR multiplier for Take Profit.
+        sl_val: ATR multiplier for Stop Loss.
+        prices_val: DataFrame aligned to X_val with close/atr_14.
+        hyperparams: XGBoost hyperparameters.
+        swing_period: Cooldown bars after each trade.
+        n_jobs: Passed to XGBClassifier. Use 1 for reproducible final
+            reruns of a winning config (see train_and_evaluate).
+
+    Returns:
+        Tuple (model, best_threshold, val_metrics) where val_metrics
+        contains val_fitness_score, val_profit_factor, val_max_drawdown,
+        val_trade_count, val_net_profit_pct.
+    """
+    hp = hyperparams
+    ts = get_trading_settings()
+    fee_rate: float = ts["fee_rate"]
+    slippage: float = ts["slippage"]
+
+    imbalance = sum(y_train == 0) / sum(y_train == 1) if sum(y_train == 1) > 0 else 1
+
+    model = xgb.XGBClassifier(
+        n_estimators=hp["n_estimators"],
+        max_depth=hp["max_depth"],
+        learning_rate=hp["learning_rate"],
+        scale_pos_weight=imbalance,
+        early_stopping_rounds=10,
+        eval_metric="logloss",
+        tree_method="hist",
+        random_state=42,
+        n_jobs=n_jobs,
+    )
+    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+
+    best_threshold, _ = find_optimal_threshold(
+        model, X_val, y_val, tp_val, sl_val, prices_val, fee_rate, slippage,
+        swing_period=swing_period,
+    )
+
+    if best_threshold == -1.0:
+        return model, best_threshold, {}
+
+    score, val_fit_metrics = fitness_score(
+        model, X_val, y_val, prices_val, tp_val, sl_val, fee_rate, slippage,
+        best_threshold, swing_period=swing_period,
+    )
+
+    net_profit_val = val_fit_metrics["gross_profit"] - val_fit_metrics["gross_loss"]
+
+    val_metrics: dict[str, Any] = {
+        "val_fitness_score": round(score, 6),
+        "val_profit_factor": val_fit_metrics["profit_factor"],
+        "val_max_drawdown": val_fit_metrics["max_drawdown"],
+        "val_trade_count": val_fit_metrics["trade_count"],
+        "val_net_profit_pct": round(net_profit_val, 4),
+    }
+
+    return model, best_threshold, val_metrics
 
 
 # --- DATA LOADING ---
@@ -87,34 +351,39 @@ def compute_target(
     sl_price: pd.Series = df["close"] - (df["atr_14"] * atr_sl_multi)
 
     if lower_tf_df is not None:
-        # --- Multi-timeframe path -------------------------------------------
+        # --- Multi-timeframe path (Numba Optimized) -------------------------
         missing = {"high", "low"} - set(lower_tf_df.columns)
         if missing:
             raise ValueError(
                 f"lower_tf_df is missing required columns: {missing}"
             )
 
-        targets: list[int] = []
-        for i, (date, row) in enumerate(df.iterrows()):
-            window_start = date + pd.Timedelta(days=1)
-            window_end = date + pd.Timedelta(days=swing_days)
-            ltf_window = lower_tf_df.loc[
-                (lower_tf_df.index >= window_start)
-                & (lower_tf_df.index <= window_end)
-            ]
+        daily_times = df.index.to_numpy().astype("datetime64[ns]").astype(np.int64)
+        ltf_times = lower_tf_df.index.to_numpy().astype("datetime64[ns]").astype(np.int64)
+        
+        tp_prices_arr = tp_price.values
+        sl_prices_arr = sl_price.values
+        ltf_highs = lower_tf_df["high"].values
+        ltf_lows = lower_tf_df["low"].values
+        
+        ns_1_day = pd.Timedelta(days=1).value
+        ns_swing = pd.Timedelta(days=swing_days).value
 
-            label = 0 
-            for _, ltf_row in ltf_window.iterrows():
-                if ltf_row["low"] <= sl_price.iloc[i]:
-                    label = 0
-                    break
-                if ltf_row["high"] >= tp_price.iloc[i]:
-                    label = 1
-                    break
-            targets.append(label)
-
+        targets = _resolve_targets_numba(
+            daily_times=daily_times,
+            tp_prices=tp_prices_arr,
+            sl_prices=sl_prices_arr,
+            ltf_times=ltf_times,
+            ltf_highs=ltf_highs,
+            ltf_lows=ltf_lows,
+            ns_1_day=ns_1_day,
+            ns_swing=ns_swing
+        )
+        
         df["target"] = targets
+
     else:
+        # --- Daily approximation path (Vectorized Fallback) -----------------
         df["max_high_future"] = df["high"].rolling(window=swing_days).max().shift(-swing_days)
         df["min_low_future"] = df["low"].rolling(window=swing_days).min().shift(-swing_days)
 
@@ -150,38 +419,6 @@ def cleanup_columns(df: pd.DataFrame, drop_nan: bool = True) -> pd.DataFrame:
     if drop_nan:
         df.dropna(inplace=True)
     return df
-
-
-# --- TEMPORAL SPLIT ---
-def temporal_split_with_embargo(
-    df: pd.DataFrame,
-    train_pct: float = 0.7,
-    val_pct: float = 0.1,
-    embargo_days: int = 5,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Split the DataFrame into train/val/test with embargo between blocks.
-
-    Args:
-        df: Temporally ordered DataFrame.
-        train_pct: Proportion of data for training.
-        val_pct: Proportion of data for validation.
-        embargo_days: Candles of separation to prevent data leakage.
-
-    Returns:
-        Tuple ``(df_train, df_val, df_test)``.
-    """
-    n = len(df)
-    train_end = int(n * train_pct)
-    val_start = train_end + embargo_days
-    val_size = int(n * val_pct)
-    val_end = val_start + val_size
-    test_start = val_end + embargo_days
-
-    return (
-        df.iloc[:train_end],
-        df.iloc[val_start:val_end],
-        df.iloc[test_start:],
-    )
 
 
 # --- OPTIMAL THRESHOLD ---
@@ -221,45 +458,34 @@ def find_optimal_threshold(
     Returns:
         Tuple ``(best_threshold, best_profit)`` where ``best_profit`` is the
         total net return across all executable sequential trades.
+        Returns ``(-1.0, 0.0)`` if no valid threshold meets minimum trade criteria.
     """
     proba: np.ndarray = model.predict_proba(X_val)[:, 1]
     cost_per_trade: float = (2.0 * fee_rate) + (2.0 * slippage)
-    atr = prices_val["atr_14"].values
-    close = prices_val["close"].values
-    y_arr = y_val.values
-    n = len(proba)
-
-    best_threshold: float = 0.50
-    best_profit: float = -np.inf
+    atr: np.ndarray = prices_val["atr_14"].values
+    close: np.ndarray = prices_val["close"].values
+    y_arr: np.ndarray = y_val.values
+    n: int = len(proba)
 
     min_trades = max(5, int(n / (swing_period + 15)))
 
-    for thresh in np.arange(0.50, 0.85, 0.01):
-        profit = 0.0
-        trade_count = 0
-        i = 0
-        while i < n:
-            if proba[i] >= thresh:
-                if y_arr[i] == 1:
-                    profit += (atr[i] * tp_val) / close[i] - cost_per_trade
-                else:
-                    profit -= (atr[i] * sl_val) / close[i] + cost_per_trade
-                trade_count += 1
-                i += swing_period
-            else:
-                i += 1
-
-        if trade_count < min_trades:
-            continue
-
-        if profit > best_profit:
-            best_profit = profit
-            best_threshold = float(thresh)
+    best_threshold, best_profit = _compute_threshold_loop(
+        proba=proba,
+        y_arr=y_arr,
+        atr=atr,
+        close=close,
+        tp_val=float(tp_val),
+        sl_val=float(sl_val),
+        cost_per_trade=float(cost_per_trade),
+        swing_period=int(swing_period),
+        n=int(n),
+        min_trades=int(min_trades)
+    )
 
     if best_profit == -np.inf:
         return -1.0, 0.0
 
-    return best_threshold, best_profit
+    return float(best_threshold), float(best_profit)
 
 
 # --- FITNESS SCORE (VALIDATION SET ONLY) ---
@@ -304,39 +530,25 @@ def fitness_score(
     """
     proba: np.ndarray = model.predict_proba(X_val)[:, 1]
     cost_per_trade: float = (2.0 * fee_rate) + (2.0 * slippage)
-    atr = prices_val["atr_14"].values
-    close = prices_val["close"].values
-    y_arr = y_val.values
-    n = len(proba)
+    atr: np.ndarray = prices_val["atr_14"].values
+    close: np.ndarray = prices_val["close"].values
+    y_arr: np.ndarray = y_val.values
+    n: int = len(proba)
 
-    # --- Sequential simulation (one trade at a time) ---
-    trade_returns: list[float] = []
-    i = 0
-    while i < n:
-        if proba[i] >= threshold:
-            if y_arr[i] == 1:
-                ret = (atr[i] * tp_val) / close[i] - cost_per_trade
-            else:
-                ret = -((atr[i] * sl_val) / close[i]) - cost_per_trade
-            trade_returns.append(ret)
-            i += swing_period
-        else:
-            i += 1
+    trade_count, gross_profit, gross_loss, mdd = _simulate_fitness_sequential(
+        proba=proba,
+        y_arr=y_arr,
+        atr=atr,
+        close=close,
+        threshold=float(threshold),
+        tp_val=float(tp_val),
+        sl_val=float(sl_val),
+        cost_per_trade=float(cost_per_trade),
+        swing_period=int(swing_period),
+        n=int(n)
+    )
 
-    trade_count = len(trade_returns)
-    rets_arr = np.array(trade_returns)
-
-    gross_profit = float(rets_arr[rets_arr > 0].sum()) if trade_count > 0 else 0.0
-    gross_loss = float(abs(rets_arr[rets_arr < 0].sum())) if trade_count > 0 else 0.0
     pf = gross_profit / max(gross_loss, 1e-9)
-
-    if trade_count > 0:
-        account_equity = np.cumprod(1.0 + rets_arr)
-        running_max = np.maximum.accumulate(account_equity)
-        drawdowns = (running_max - account_equity) / running_max
-        mdd = float(drawdowns.max())
-    else:
-        mdd = 0.0
 
     metrics: dict[str, Any] = {
         "profit_factor": round(pf, 4),
@@ -355,8 +567,7 @@ def fitness_score(
     # Frequency penalty: relative to the theoretical maximum trades
     # achievable given the val set length and swing_period.
     # A config is penalized if it trades less than 15% of its theoretical max.
-    # The 0.15 factor represents
-    # the minimum acceptable market participation rate.
+    # The 0.15 factor represents the minimum acceptable market participation rate.
     max_possible_trades = max(1, len(y_val) / swing_period)
     target_min_trades = max(12, int(max_possible_trades * 0.15))
     frequency_penalty = min(1.0, trade_count / target_min_trades)
@@ -402,6 +613,33 @@ def build_strategies(
 
 
 # --- TRAINING AND EVALUATION (per strategy) ---
+def train_and_evaluate_val_only(
+    X_train: pd.DataFrame,
+    X_val: pd.DataFrame,
+    y_train: pd.Series,
+    y_val: pd.Series,
+    tp_val: float,
+    sl_val: float,
+    prices_val: pd.DataFrame,
+    hyperparams: Optional[dict[str, Any]] = None,
+    swing_period: int = 5,
+) -> tuple[xgb.XGBClassifier, dict[str, Any], float]:
+    """Fast path: train and evaluate on validation only. Never touches
+    the test set or X_live. Use this inside the grid-search inner loop;
+    reserve `train_and_evaluate` for the winning config.
+
+    Returns:
+        Tuple (model, val_metrics, best_threshold). `best_threshold` is
+        -1.0 when no threshold met the minimum trade count — callers
+        should `continue` in that case rather than scoring the config.
+    """
+    model, best_threshold, val_metrics = _train_core(
+        X_train, X_val, y_train, y_val, tp_val, sl_val, prices_val,
+        hyperparams, swing_period, n_jobs=-1,
+    )
+    return model, val_metrics, best_threshold
+
+
 def train_and_evaluate(
     X_train: pd.DataFrame,
     X_val: pd.DataFrame,
@@ -415,72 +653,40 @@ def train_and_evaluate(
     prices_test: pd.DataFrame,
     hyperparams: Optional[dict[str, Any]] = None,
     swing_period: int = 5,
+    n_jobs: int = -1,
 ) -> tuple[xgb.XGBClassifier, dict[str, Any], np.ndarray, list[Any], float]:
-    """Train an XGBClassifier and return metrics evaluated on the validation set.
+    """Full path: train, then evaluate on both validation and test, plus
+    X_live-ready predictions. Reserved for audit mode or for the single
+    winning config after grid search.
 
-    Training uses ``early_stopping_rounds=10`` with ``eval_set=[(X_val, y_val)]``
-    so the model stops when validation loss stops improving, preventing
-    severe overfitting (Task 4).
-
-    Profit/loss per trade is calculated as an **actual return percentage**
-    using ``(atr * multiplier) / close`` so that ATR multipliers are never
-    treated as direct fee offsets (Task 2).
-
-    Model selection is driven by ``fitness_score`` evaluated exclusively on
-    the validation set (Task 3).  Execution is **sequential**: only one trade
-    is open at a time; subsequent signals within ``swing_period`` bars are
-    skipped.  ``net_profit_pct`` and ``profit_factor`` are derived directly
-    from ``fitness_score`` so there is no duplicate calculation.
-
-    Args:
-        X_train: Training features.
-        X_val: Validation features.
-        X_test: Test features.
-        y_train: Training target.
-        y_val: Validation target.
-        y_test: Test target.
-        tp_val: ATR multiplier for Take Profit.
-        sl_val: ATR multiplier for Stop Loss.
-        prices_val: DataFrame aligned to ``X_val`` with ``close`` and
-            ``atr_14`` columns — used for realistic return calculations and
-            the fitness score.
-        hyperparams: Optional XGBoost hyperparameters.
-        swing_period: Cooldown bars after each trade (default 5).
-
-    Returns:
-        Tuple ``(model, metrics, preds_test, buy_dates_all, best_threshold)``.
+    `n_jobs` defaults to -1 for backward compatibility, but callers doing
+    a reproducible final rerun of a winning config (after fast-path
+    selection) should pass `n_jobs=1` — with tree_method='hist' and
+    n_jobs=-1, floating-point aggregation order across threads is not
+    guaranteed identical between runs even with a fixed random_state.
     """
-    hp = hyperparams
+    model, best_threshold, val_metrics = _train_core(
+        X_train, X_val, y_train, y_val, tp_val, sl_val, prices_val,
+        hyperparams, swing_period, n_jobs=n_jobs,
+    )
+
+    if best_threshold == -1.0:
+        empty_metrics: dict[str, Any] = {
+            "net_profit_pct": 0.0, "test_profit_factor": 0.0, "accuracy": 0.0,
+            "val_fitness_score": -999.0, "test_fitness_score": -999.0,
+            "test_max_drawdown": 0.0, "test_trade_count": 0,
+            "test_signals": 0, "test_hits": 0, "opt_threshold": -1.0,
+            "val_profit_factor": 0.0, "val_max_drawdown": 1.0,
+            "val_trade_count": 0, "val_net_profit_pct": 0.0,
+        }
+        return model, empty_metrics, np.array([]), [], -1.0
+
     ts = get_trading_settings()
     fee_rate: float = ts["fee_rate"]
     slippage: float = ts["slippage"]
 
-    imbalance = sum(y_train == 0) / sum(y_train == 1) if sum(y_train == 1) > 0 else 1
-
-    model = xgb.XGBClassifier(
-        n_estimators=hp["n_estimators"],
-        max_depth=hp["max_depth"],
-        learning_rate=hp["learning_rate"],
-        scale_pos_weight=imbalance,
-        early_stopping_rounds=10,
-        eval_metric="logloss",
-        random_state=42,
-        n_jobs=-1,
-    )
-    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
-
-    best_threshold, _ = find_optimal_threshold(
-        model, X_val, y_val, tp_val, sl_val, prices_val, fee_rate, slippage,
-        swing_period=swing_period,
-    )
-
     y_probs_val: np.ndarray = model.predict_proba(X_val)[:, 1]
     preds_val = (y_probs_val >= best_threshold).astype(int)
-
-    score, val_fit_metrics = fitness_score(
-        model, X_val, y_val, prices_val, tp_val, sl_val, fee_rate, slippage,
-        best_threshold, swing_period=swing_period,
-    )
 
     y_probs_test: np.ndarray = model.predict_proba(X_test)[:, 1]
     preds_test = (y_probs_test >= best_threshold).astype(int)
@@ -495,26 +701,18 @@ def train_and_evaluate(
     test_hits = int(sum((preds_test == 1) & (y_test == 1)))
 
     net_profit_test = test_fit_metrics["gross_profit"] - test_fit_metrics["gross_loss"]
-    profit_factor_test = test_fit_metrics["profit_factor"]
-    net_profit_val = val_fit_metrics["gross_profit"] - val_fit_metrics["gross_loss"]
 
     metrics: dict[str, Any] = {
-        # Test-set metrics (out-of-sample reporting only)
         "net_profit_pct": round(net_profit_test, 4),
-        "test_profit_factor": round(profit_factor_test, 4),
+        "test_profit_factor": round(test_fit_metrics["profit_factor"], 4),
         "accuracy": round(prec_test * 100, 2),
-        "val_fitness_score": round(score, 6),
         "test_fitness_score": round(test_score, 6),
         "test_max_drawdown": test_fit_metrics["max_drawdown"],
         "test_trade_count": test_fit_metrics["trade_count"],
         "test_signals": test_signals,
         "test_hits": test_hits,
         "opt_threshold": round(best_threshold, 3),
-        # Validation-set metrics for model selection (no test-set leakage)
-        "val_profit_factor": val_fit_metrics["profit_factor"],
-        "val_max_drawdown": val_fit_metrics["max_drawdown"],
-        "val_trade_count": val_fit_metrics["trade_count"],
-        "val_net_profit_pct": round(net_profit_val, 4),
+        **val_metrics,
     }
 
     buy_dates_val = y_val.index[preds_val == 1].tolist()
