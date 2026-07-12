@@ -18,6 +18,9 @@ SAMPLE_CONFIG: dict[str, Any] = {
     "atr_tp_multi": 2.0,
     "atr_sl_multi": 1.0,
     "swing_period": 7,
+    "n_estimators": 200,
+    "max_depth": 3,
+    "learning_rate": 0.05,
 }
 
 

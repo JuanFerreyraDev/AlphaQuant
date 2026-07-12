@@ -28,6 +28,7 @@ nvidia-nccl-cu12==2.29.7
 packaging==26.0
 pandas==3.0.2
 pandas-ta==0.4.71b0
+plotly==6.0.1
 pluggy==1.6.0
 propcache==0.4.1
 pycares==5.0.1

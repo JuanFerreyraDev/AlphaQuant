@@ -56,46 +56,6 @@ REQUIRED_KEYS: list[str] = [
 ]
 
 
-def run_full_training_pipeline(symbol: str) -> tuple[bool, str, str]:
-    """Execute the complete training pipeline for a symbol.
-
-    Strict order:
-      1. ``fetch_historical_data`` — download fresh data.
-      2. ``optimize_strategy`` — search for a new strategy and write
-         ``last_trained`` to ``config.json``.
-      3. ``train_factory`` — train the model and save the ``.pkl``.
-
-    Args:
-        symbol: Trading pair (e.g. ``'BTC_USDT'``).
-
-    Raises:
-        RuntimeError: If any of the 3 steps fails.
-
-    Returns:
-        Tuple ``(trained, safe_symbol, reason)``.
-        If ``trained`` is ``False``, ``reason`` describes why it was skipped.
-    """
-    safe_symbol = _sanitize_symbol(symbol)
-    needs_training, reason = _check_training_freshness(safe_symbol)
-    if not needs_training:
-        logger.info("[Pipeline] Skipping %s: %s", safe_symbol, reason)
-        return needs_training, safe_symbol, reason
-    logger.info("[Pipeline] Step 1/3: Downloading data for %s...", safe_symbol)
-    fetch_historical_data(safe_symbol)
-
-    df_fg = get_fear_and_greed()
-
-    logger.info("[Pipeline] Step 2/3: Optimizing strategy for %s...", safe_symbol)
-    optimize_strategy(safe_symbol, df_fg)
-
-    logger.info("[Pipeline] Step 3/3: Training model for %s...", safe_symbol)
-    train_factory(safe_symbol, df_fg)
-
-    logger.info("[Pipeline] Pipeline complete for %s.", safe_symbol)
-
-    return needs_training, safe_symbol, ""
-
-
 def _sanitize_symbol(symbol: str) -> str:
     """Convert any symbol format to a file-safe format.
 
@@ -131,6 +91,7 @@ def _check_training_freshness(safe_symbol: str) -> tuple[bool, str]:
         with config_path.open("r", encoding="utf-8") as fh:
             config = json.load(fh)
     except (json.JSONDecodeError, OSError):
+        logger.warning("Failed to load config.json for %s", safe_symbol)
         return True, ""
 
     last_trained_str = config.get("last_trained")
@@ -144,6 +105,7 @@ def _check_training_freshness(safe_symbol: str) -> tuple[bool, str]:
         now_utc = datetime.datetime.now(datetime.timezone.utc)
         days_elapsed = (now_utc - last_trained_dt).days
     except (ValueError, TypeError):
+        logger.warning("Invalid last_trained format in config.json for %s: %s", safe_symbol, last_trained_str)
         return True, ""
 
     if days_elapsed < TRAINING_COOLDOWN_DAYS:
@@ -153,6 +115,89 @@ def _check_training_freshness(safe_symbol: str) -> tuple[bool, str]:
         )
 
     return True, ""
+
+
+def _check_oos_sanity_check(safe_symbol: str) -> tuple[bool, str]:
+    """Check whether a symbol passed the out-of-sample sanity check.
+
+    Reads ``data/models/{safe_symbol}/config.json`` and checks the
+    ``passed_oos_sanity_check`` field.
+
+    Args:
+        safe_symbol: Normalized symbol (e.g. ``'BTC_USDT'``).
+
+    Returns:
+        Tuple ``(passed_oos_sanity_check, reason)``.  If ``passed_oos_sanity_check`` is
+        ``False``, ``reason`` describes why it failed.
+    """
+    base_dir = get_project_root()
+    config_path = base_dir / "data" / "models" / safe_symbol / "config.json"
+
+    if not config_path.exists():
+        logger.warning("Config.json not found for %s", safe_symbol)
+        return False, "Config.json not found"
+
+    try:
+        with config_path.open("r", encoding="utf-8") as fh:
+            config = json.load(fh)
+    except (json.JSONDecodeError, OSError):
+        logger.warning("Failed to load config.json for %s", safe_symbol)
+        return False, "Failed to load config.json"
+
+    passed_oos_sanity_check = config.get("passed_oos_sanity_check", False)
+    if not passed_oos_sanity_check:
+        return False, f"Out-of-sample sanity check failed"
+
+    return True, ""
+
+
+def run_full_training_pipeline(symbol: str) -> tuple[bool, str, str]:
+    """Execute the complete training pipeline for a symbol.
+
+    Strict order:
+      1. ``fetch_historical_data`` — download fresh data.
+      2. ``optimize_strategy`` — search for a new strategy and write
+         ``last_trained`` to ``config.json``.
+      3. ``train_factory`` — train the model and save the ``.pkl``.
+
+    Args:
+        symbol: Trading pair (e.g. ``'BTC_USDT'``).
+
+    Raises:
+        RuntimeError: If any of the 3 steps fails.
+
+    Returns:
+        Tuple ``(trained, safe_symbol, reason)``.
+        If ``trained`` is ``False``, ``reason`` describes why it was skipped.
+    """
+    safe_symbol = _sanitize_symbol(symbol)
+    passed_oos_sanity_check, reason = _check_oos_sanity_check(safe_symbol)
+    if not passed_oos_sanity_check:
+        logger.info("[Pipeline] Skipping %s: Out-of-sample sanity check failed", safe_symbol)
+        return False, safe_symbol, reason
+    needs_training, reason = _check_training_freshness(safe_symbol)
+    if not needs_training:
+        logger.info("[Pipeline] Skipping %s: Trained less than %d days ago", safe_symbol, TRAINING_COOLDOWN_DAYS)
+        return False, safe_symbol, reason
+    try:
+        logger.info("[Pipeline] Starting full training pipeline for %s...", safe_symbol)
+        logger.info("[Pipeline] Step 1/3: Downloading data for %s...", safe_symbol)
+        fetch_historical_data(safe_symbol)
+
+        df_fg = get_fear_and_greed()
+
+        logger.info("[Pipeline] Step 2/3: Optimizing strategy for %s...", safe_symbol)
+        optimize_strategy(safe_symbol, df_fg)
+
+        logger.info("[Pipeline] Step 3/3: Training model for %s...", safe_symbol)
+        train_factory(safe_symbol, df_fg)
+
+        logger.info("[Pipeline] Pipeline complete for %s.", safe_symbol)
+    except RuntimeError as exc:
+        logger.error("[Pipeline] Error during training pipeline for %s: %s", safe_symbol, exc)
+        return False, safe_symbol, str(exc)
+
+    return needs_training, safe_symbol, ""
 
 
 async def daily_market_evaluation(app: Any, chat_id: int) -> int:

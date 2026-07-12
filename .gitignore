@@ -45,3 +45,7 @@ data/models/*
 
 # Bot runtime state
 data/bot_state.json
+
+# Plots
+data/plots/*
+!data/plots/.gitkeep

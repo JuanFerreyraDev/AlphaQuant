@@ -18,14 +18,14 @@ import xgboost as xgb
 from src.brain.features import compute_all_technicals, add_sentiment
 from src.config.settings_loader import get_active_symbols, get_project_root
 from src.utils.helpers import (
-    DEFAULT_HP,
     cleanup_columns,
     compute_target,
     load_csv_data,
 )
 
 logger = logging.getLogger(__name__)
-warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning, module="xgboost")
 
 
 def train_factory(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
@@ -82,17 +82,35 @@ def train_factory(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
 
     imbalance = sum(y == 0) / sum(y == 1) if sum(y == 1) > 0 else 1
 
+    hp_n_estimators: int = config["n_estimators"]
+    hp_max_depth: int = config["max_depth"]
+    hp_learning_rate: float = config["learning_rate"]
+
     model = xgb.XGBClassifier(
-        n_estimators=DEFAULT_HP["n_estimators"],
-        max_depth=DEFAULT_HP["max_depth"],
-        learning_rate=DEFAULT_HP["learning_rate"],
+        n_estimators=hp_n_estimators,
+        max_depth=hp_max_depth,
+        learning_rate=hp_learning_rate,
         scale_pos_weight=imbalance,
+        eval_metric="logloss",
         random_state=42,
         n_jobs=-1,
     )
 
-    logger.info("Training XGBClassifier with %d features...", len(features_list))
-    model.fit(X, y)
+    logger.info(
+        "Training XGBClassifier with %d features (depth=%d, trees=%d, lr=%.4f)...",
+        len(features_list), hp_max_depth, hp_n_estimators, hp_learning_rate,
+    )
+
+    # Hold out the most recent rows for early stopping to prevent overfitting,
+    # mirroring the regularization used during optimization.
+    holdout_size = min(30, int(len(X) * 0.1))
+    if holdout_size >= 10:
+        X_fit, X_hold = X.iloc[:-holdout_size], X.iloc[-holdout_size:]
+        y_fit, y_hold = y.iloc[:-holdout_size], y.iloc[-holdout_size:]
+        model.set_params(early_stopping_rounds=10)
+        model.fit(X_fit, y_fit, eval_set=[(X_hold, y_hold)], verbose=False)
+    else:
+        model.fit(X, y, verbose=False)
 
     production_bundle: dict[str, Any] = {
         "model": model,
