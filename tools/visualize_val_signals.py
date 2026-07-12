@@ -36,7 +36,7 @@ from src.brain.features import add_sentiment, compute_all_technicals  # noqa: E4
 from src.config.settings_loader import get_project_root  # noqa: E402
 from src.utils.helpers import load_csv_data  # noqa: E402
 
-# Mirrors the train/val+test split used by temporal_split_with_embargo
+# Mirrors the train/val+test split used by compute_dynamic_split
 _VAL_START_PCT: float = 0.8
 
 
