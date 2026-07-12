@@ -9,6 +9,7 @@ import pytest
 
 from src.engine.tasks import (
     TRAINING_COOLDOWN_DAYS,
+    _check_oos_sanity_check,
     _check_training_freshness,
     _evaluate_model,
     _execute_and_notify,
@@ -534,9 +535,11 @@ class TestRunFullTrainingPipeline:
     @patch("src.engine.tasks.get_fear_and_greed", return_value=pd.DataFrame())
     @patch("src.engine.tasks.fetch_historical_data")
     @patch("src.engine.tasks._check_training_freshness", return_value=(True, ""))
+    @patch("src.engine.tasks._check_oos_sanity_check", return_value=(True, ""))
     def test_runs_all_three_steps_in_order(
         self,
         _mock_freshness: MagicMock,
+        _mock_oos: MagicMock,
         mock_fetch: MagicMock,
         _mock_fg: MagicMock,
         mock_optimize: MagicMock,
@@ -560,9 +563,11 @@ class TestRunFullTrainingPipeline:
         side_effect=RuntimeError("download failed"),
     )
     @patch("src.engine.tasks._check_training_freshness", return_value=(True, ""))
+    @patch("src.engine.tasks._check_oos_sanity_check", return_value=(True, ""))
     def test_returns_error_on_fetch_failure(
         self,
         _mock_freshness: MagicMock,
+        _mock_oos: MagicMock,
         _mock: MagicMock,
     ) -> None:
         """Error in fetch_historical_data is captured and returned in reason."""
@@ -579,12 +584,14 @@ class TestRunFullTrainingPipeline:
     @patch("src.engine.tasks.get_fear_and_greed", return_value=pd.DataFrame())
     @patch("src.engine.tasks.fetch_historical_data")
     @patch("src.engine.tasks._check_training_freshness", return_value=(True, ""))
+    @patch("src.engine.tasks._check_oos_sanity_check", return_value=(True, ""))
     def test_returns_error_on_optimize_failure(
         self,
         _mock_freshness: MagicMock,
         _mock_fetch: MagicMock,
         _mock_fg: MagicMock,
         _mock_opt: MagicMock,
+        _mock_oos: MagicMock,
     ) -> None:
         """Error in optimize_strategy is captured and returned in reason."""
         trained, safe_symbol, reason = run_full_training_pipeline("BTC_USDT")
@@ -600,9 +607,11 @@ class TestRunFullTrainingPipeline:
     @patch("src.engine.tasks.get_fear_and_greed", return_value=pd.DataFrame())
     @patch("src.engine.tasks.fetch_historical_data")
     @patch("src.engine.tasks._check_training_freshness", return_value=(True, ""))
+    @patch("src.engine.tasks._check_oos_sanity_check", return_value=(True, ""))
     def test_returns_error_on_train_failure(
         self,
         _mock_freshness: MagicMock,
+        _mock_oos: MagicMock,
         _mock_fetch: MagicMock,
         _mock_fg: MagicMock,
         _mock_opt: MagicMock,
@@ -622,9 +631,11 @@ class TestRunFullTrainingPipeline:
         "src.engine.tasks._check_training_freshness",
         return_value=(False, "Trained 3 day(s) ago, less than 14 days"),
     )
+    @patch("src.engine.tasks._check_oos_sanity_check", return_value=(True, ""))
     def test_skips_when_recently_trained(
         self,
         _mock_freshness: MagicMock,
+        _mock_oos: MagicMock,
         mock_fetch: MagicMock,
         mock_optimize: MagicMock,
         mock_train: MagicMock,
@@ -635,6 +646,30 @@ class TestRunFullTrainingPipeline:
         assert trained is False
         assert safe_symbol == "BTC_USDT"
         assert "less than" in reason
+        mock_fetch.assert_not_called()
+        mock_optimize.assert_not_called()
+        mock_train.assert_not_called()
+
+    @patch("src.engine.tasks.train_factory")
+    @patch("src.engine.tasks.optimize_strategy")
+    @patch("src.engine.tasks.fetch_historical_data")
+    @patch("src.engine.tasks._check_oos_sanity_check", return_value=(False, "Out-of-sample sanity check failed"))
+    @patch("src.engine.tasks._check_training_freshness", return_value=(True, ""))
+    def test_skips_when_oos_sanity_check_fails(
+        self,
+        _mock_freshness: MagicMock,
+        _mock_oos: MagicMock,
+        mock_fetch: MagicMock,
+        mock_optimize: MagicMock,
+        mock_train: MagicMock,
+    ) -> None:
+        """Pipeline skips all steps when out-of-sample sanity check fails."""
+
+        trained, safe_symbol, reason = run_full_training_pipeline("BTC_USDT")
+        
+        assert trained is False
+        assert safe_symbol == "BTC_USDT"
+        assert "sanity check" in reason
         mock_fetch.assert_not_called()
         mock_optimize.assert_not_called()
         mock_train.assert_not_called()
