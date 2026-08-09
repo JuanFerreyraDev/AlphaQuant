@@ -3,10 +3,34 @@
 import pytest
 
 from src.utils.data_splits import (
+    DEFAULT_BARS_PER_TRADE_SAFETY_FACTOR,
+    STAT_FLOOR_VAL_TRADES,
     compute_dynamic_split,
     compute_min_val_trades,
     compute_split_boundaries,
+    get_calibrated_constants,
 )
+
+
+class TestGetCalibratedConstants:
+    def test_1d_returns_default_constants(self) -> None:
+        cal = get_calibrated_constants("1d")
+        assert cal["bars_per_trade_safety_factor"] == DEFAULT_BARS_PER_TRADE_SAFETY_FACTOR
+        assert cal["stat_floor_val_trades"] == STAT_FLOOR_VAL_TRADES
+
+    def test_4h_has_its_own_calibration(self) -> None:
+        """4h must be explicitly calibrated, not silently inherit 1d's
+        factor=5 (which assumes ~3x fewer trades than observed on real
+        BTC_USDT/4h data)."""
+        cal = get_calibrated_constants("4h")
+        assert cal["bars_per_trade_safety_factor"] == 2
+        assert cal != get_calibrated_constants("1d")
+
+    def test_unknown_timeframe_falls_back_to_1d_with_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level("WARNING"):
+            cal = get_calibrated_constants("15m")
+        assert cal == get_calibrated_constants("1d")
+        assert "No calibrated data-split constants" in caplog.text
 
 
 class TestComputeDynamicSplit:
@@ -63,8 +87,17 @@ class TestComputeDynamicSplit:
         and this little data, val+test would consume 60% of allocatable bars
         (vs. a 35% cap), which would leave train with a proportionally tiny,
         statistically weak slice of the data.
+
+        Explicit floors (12/15) are passed here rather than relying on the
+        module defaults (8/10 as of the timeframe-calibration fix), since the
+        module defaults alone are no longer high enough to trip the cap at
+        this bar count — the scenario itself (floors starving train) is
+        still valid and worth covering independent of what the defaults are.
         """
-        result = compute_dynamic_split(n_bars=1460, swing_period=5, embargo_days=5)
+        result = compute_dynamic_split(
+            n_bars=1460, swing_period=5, embargo_days=5,
+            min_val_trades=12, min_test_trades=15,
+        )
         assert result is None
 
     def test_lower_trade_floors_avoid_starving_train(self) -> None:
@@ -130,9 +163,10 @@ class TestComputeSplitBoundaries:
 
 class TestComputeMinValTrades:
     def test_floor(self) -> None:
-        """Never returns less than the absolute floor of 12."""
+        """Never returns less than the absolute floor of 8
+        (STAT_FLOOR_VAL_TRADES)."""
         result = compute_min_val_trades(n_val_bars=10, swing_period=5)
-        assert result == 12
+        assert result == 8
 
     def test_scales_with_bars(self) -> None:
         """More validation bars yields a higher minimum trade count,
