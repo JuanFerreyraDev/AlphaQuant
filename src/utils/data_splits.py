@@ -4,11 +4,18 @@ These functions are asset-agnostic: they operate on bar counts and
 swing periods without knowledge of strategy-specific metrics.
 Import them from ``strategy_optimizer`` or any module that needs to
 partition time-series data for model selection.
+
+The calibration constants (``DEFAULT_BARS_PER_TRADE_SAFETY_FACTOR``,
+``STAT_FLOOR_VAL_TRADES``, etc.) were empirically measured on
+``BTC_USDT`` / ``1d``.  When operating on a different timeframe, use
+``get_calibrated_constants()`` to retrieve per-timeframe values or
+fall back to the most conservative known entry with a warning.
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +28,60 @@ VAL_PCT_FLOOR = 0.15
 TEST_PCT_FLOOR = 0.15
 
 MAX_VAL_TEST_SHARE = 0.45
+
+# Per-timeframe calibration.
+_TIMEFRAME_CALIBRATIONS: dict[str, dict[str, Any]] = {
+    "1d": {
+        "bars_per_trade_safety_factor": DEFAULT_BARS_PER_TRADE_SAFETY_FACTOR,
+        "stat_floor_val_trades": STAT_FLOOR_VAL_TRADES,
+        "stat_floor_test_trades": STAT_FLOOR_TEST_TRADES,
+        "max_val_test_share": MAX_VAL_TEST_SHARE,
+    },
+
+    "4h": {
+        "bars_per_trade_safety_factor": 2,
+        "stat_floor_val_trades": STAT_FLOOR_VAL_TRADES,
+        "stat_floor_test_trades": STAT_FLOOR_TEST_TRADES,
+        "max_val_test_share": MAX_VAL_TEST_SHARE,
+    },
+}
+
+
+def get_calibrated_constants(timeframe: str = "1d") -> dict[str, Any]:
+    """Return the split calibration constants for a given timeframe.
+
+    If the requested timeframe has an explicit calibration entry, those
+    values are returned directly.  Otherwise the function falls back to
+    the most conservative known entry (currently ``1d``) and logs a
+    warning so the operator is aware the constants have not been
+    validated for this granularity.
+
+    Args:
+        timeframe: Candle interval string (e.g. ``'1d'``, ``'4h'``).
+
+    Returns:
+        Dictionary with keys: ``bars_per_trade_safety_factor``,
+        ``stat_floor_val_trades``, ``stat_floor_test_trades``,
+        ``max_val_test_share``.
+    """
+    if timeframe in _TIMEFRAME_CALIBRATIONS:
+        return dict(_TIMEFRAME_CALIBRATIONS[timeframe])
+
+    logger.warning(
+        "No calibrated data-split constants for timeframe '%s'. "
+        "Falling back to '1d' defaults (factor=%d, val_floor=%d, "
+        "test_floor=%d, max_share=%.2f). These values were measured "
+        "on daily BTC_USDT data and may not be appropriate for '%s'. "
+        "Recalibrate by comparing requested vs. realized trade counts "
+        "in your optimization reports.",
+        timeframe,
+        DEFAULT_BARS_PER_TRADE_SAFETY_FACTOR,
+        STAT_FLOOR_VAL_TRADES,
+        STAT_FLOOR_TEST_TRADES,
+        MAX_VAL_TEST_SHARE,
+        timeframe,
+    )
+    return dict(_TIMEFRAME_CALIBRATIONS["1d"])
 
 
 def compute_dynamic_split(
@@ -187,7 +248,7 @@ def compute_min_val_trades(
     n_val_bars: int,
     swing_period: int,
     bars_per_trade_safety_factor: int = DEFAULT_BARS_PER_TRADE_SAFETY_FACTOR,
-    absolute_floor: int = 12,
+    absolute_floor: int = STAT_FLOOR_VAL_TRADES,
 ) -> int:
     """Compute the minimum acceptable trade count for a validation set.
 
