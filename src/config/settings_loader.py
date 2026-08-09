@@ -28,6 +28,7 @@ _PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
 _DEFAULT_BOT_STATE: dict[str, Any] = {
     "active_market": "futures",
     "bot_active": True,
+    "default_timeframe": "1d",
     "symbols": {
         "futures": ["BTC_USDT"],
         "spot": ["BTC_USDT"],
@@ -192,6 +193,9 @@ def get_config() -> dict[str, Any]:
     if "active_market" in state:
         merged.setdefault("global", {})["active_market"] = state["active_market"]
 
+    if "default_timeframe" in state:
+        merged.setdefault("global", {})["default_timeframe"] = state["default_timeframe"]
+
     for market in ("futures", "spot"):
         if market in state.get("symbols", {}):
             merged.setdefault(market, {})["symbols"] = state["symbols"][market]
@@ -240,8 +244,30 @@ def get_active_market() -> str:
     return settings.get("global", {}).get("active_market", "futures")
 
 
+def _normalize_symbol_entry(entry: Any) -> str:
+    """Extract the symbol name from either a plain string or a dict entry.
+
+    The symbols list in ``bot_state.json`` can contain either plain
+    strings (``"BTC_USDT"``) or dicts
+    (``{"symbol": "BTC_USDT", "timeframe": "4h"}``).
+
+    Args:
+        entry: A single element from the symbols list.
+
+    Returns:
+        The symbol name string.
+    """
+    if isinstance(entry, dict):
+        return str(entry.get("symbol", ""))
+    return str(entry)
+
+
 def get_active_symbols() -> list[str]:
     """Return the list of symbols for the current active market.
+
+    Handles both the legacy plain-string format and the new per-symbol
+    dict format (``{"symbol": "BTC_USDT", "timeframe": "4h"}``).
+    Always returns plain symbol strings for backward compatibility.
 
     Returns:
         List of symbol strings (e.g. ``['BTC_USDT', 'ETH_USDT']``).
@@ -250,11 +276,13 @@ def get_active_symbols() -> list[str]:
     active = get_active_market()
 
     if active == "both":
-        f_syms: list[str] = settings.get("futures", {}).get("symbols", [])
-        s_syms: list[str] = settings.get("spot", {}).get("symbols", [])
-        return list(set(f_syms + s_syms))
+        f_syms = settings.get("futures", {}).get("symbols", [])
+        s_syms = settings.get("spot", {}).get("symbols", [])
+        all_names = [_normalize_symbol_entry(e) for e in f_syms + s_syms]
+        return list(set(all_names))
 
-    return settings.get(active, {}).get("symbols", [])
+    raw = settings.get(active, {}).get("symbols", [])
+    return [_normalize_symbol_entry(e) for e in raw]
 
 
 def get_market_config(market: str = "futures") -> dict[str, Any]:
@@ -286,6 +314,70 @@ def get_trading_settings() -> dict[str, float]:
         "fee_rate": float(trading.get("fee_rate", 0.001)),
         "slippage": float(trading.get("slippage", 0.0005)),
     }
+
+
+def get_default_timeframe() -> str:
+    """Return the bot-level default timeframe.
+
+    Reads from ``bot_state.json`` → ``settings.yaml`` (``global.timeframe``
+    or ``global.default_timeframe``) → falls back to ``'1d'``.
+
+    Returns:
+        Timeframe string (e.g. ``'1d'``, ``'4h'``).
+    """
+    settings = load_settings()
+    g = settings.get("global", {})
+    return str(
+        g.get("default_timeframe", g.get("timeframe", "1d"))
+    )
+
+
+def get_symbol_timeframe(symbol: str) -> str:
+    """Resolve the configured timeframe for a specific symbol.
+
+    Looks up the symbol in the active market's symbol list.  If the
+    entry is a dict with a ``timeframe`` key, that value is returned.
+    Otherwise falls back to ``get_default_timeframe()``.
+
+    Args:
+        symbol: Trading pair (e.g. ``'BTC_USDT'``).
+
+    Returns:
+        Timeframe string for this symbol.
+    """
+    settings = load_settings()
+    active = get_active_market()
+    default_tf = get_default_timeframe()
+
+    markets = [active] if active != "both" else ["futures", "spot"]
+
+    for market in markets:
+        entries = settings.get(market, {}).get("symbols", [])
+        for entry in entries:
+            if isinstance(entry, dict):
+                if entry.get("symbol") == symbol:
+                    return str(entry.get("timeframe", default_tf))
+            elif str(entry) == symbol:
+                return default_tf
+
+    return default_tf
+
+
+def get_active_symbols_with_timeframe() -> list[dict[str, str]]:
+    """Return active symbols with their resolved timeframes.
+
+    Each element is a dict ``{"symbol": "BTC_USDT", "timeframe": "4h"}``.
+    Useful for callers that need to know each symbol's configured
+    timeframe (e.g. the training pipeline).
+
+    Returns:
+        List of dicts with ``symbol`` and ``timeframe`` keys.
+    """
+    symbols = get_active_symbols()
+    return [
+        {"symbol": s, "timeframe": get_symbol_timeframe(s)}
+        for s in symbols
+    ]
 
 
 def get_project_root() -> Path:
