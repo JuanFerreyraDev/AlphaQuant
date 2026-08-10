@@ -44,6 +44,13 @@ _TIMEFRAME_CALIBRATIONS: dict[str, dict[str, Any]] = {
         "stat_floor_test_trades": STAT_FLOOR_TEST_TRADES,
         "max_val_test_share": MAX_VAL_TEST_SHARE,
     },
+
+    "1h": {
+        "bars_per_trade_safety_factor": 2,
+        "stat_floor_val_trades": STAT_FLOOR_VAL_TRADES,
+        "stat_floor_test_trades": STAT_FLOOR_TEST_TRADES,
+        "max_val_test_share": MAX_VAL_TEST_SHARE,
+    },
 }
 
 
