@@ -83,8 +83,8 @@ class TestComputeTarget:
 
 
 class TestComputeTargetEdgeCases:
-    def test_target_contains_only_binary_values(self) -> None:
-        """target must contain only 0 and 1."""
+    def test_target_contains_valid_ternary_values(self) -> None:
+        """target must contain only -1, 0, and 1."""
         df = pd.DataFrame(
             {
                 "close": np.random.uniform(100, 200, 50),
@@ -96,7 +96,7 @@ class TestComputeTargetEdgeCases:
 
         result = compute_target(df, swing_days=3, atr_tp_multi=1.0, atr_sl_multi=1.0)
 
-        assert set(result["target"].dropna().unique()).issubset({0, 1})
+        assert set(result["target"].dropna().unique()).issubset({-1, 0, 1})
 
     def test_with_zero_atr_multipliers(self) -> None:
         """Zero ATR multipliers must not cause errors."""
@@ -166,8 +166,64 @@ class TestComputeTargetEdgeCases:
             lower_tf_df=lower_tf,
         )
 
-        # Pessimistic rule: SL checked first → target must be 0
-        assert result["target"].iloc[0] == 0
+        # Pessimistic rule: SL checked first → target must be -1
+        assert result["target"].iloc[0] == -1
+
+
+class TestSameTimeframeResolver:
+    """Regression test suite for _resolve_targets_same_tf and compute_target same-tf fallback."""
+
+    def test_same_tf_sl_first_then_tp_labels_minus_one(self) -> None:
+        """(a) Price hits SL first and then TP within window → labels -1 (not 1)."""
+        df = pd.DataFrame(
+            {
+                "close": [100.0, 100.0, 100.0, 100.0, 100.0],
+                "high":  [101.0, 102.0, 115.0, 101.0, 101.0],
+                "low":   [99.0,  88.0,  95.0,  99.0,  99.0],
+                "atr_14": [10.0] * 5,
+            }
+        )
+        res = compute_target(df, swing_days=3, atr_tp_multi=1.0, atr_sl_multi=1.0)
+        assert res["target"].iloc[0] == -1
+
+    def test_same_tf_tp_first_then_sl_labels_one(self) -> None:
+        """(b) Price hits TP first and then SL within window → labels 1."""
+        df = pd.DataFrame(
+            {
+                "close": [100.0, 100.0, 100.0, 100.0, 100.0],
+                "high":  [101.0, 112.0, 105.0, 101.0, 101.0],
+                "low":   [99.0,  95.0,  85.0,  99.0,  99.0],
+                "atr_14": [10.0] * 5,
+            }
+        )
+        res = compute_target(df, swing_days=3, atr_tp_multi=1.0, atr_sl_multi=1.0)
+        assert res["target"].iloc[0] == 1
+
+    def test_same_tf_neither_hit_labels_zero(self) -> None:
+        """(c) Neither TP nor SL touched → labels 0 (timeout)."""
+        df = pd.DataFrame(
+            {
+                "close": [100.0] * 5,
+                "high":  [101.0] * 5,
+                "low":   [99.0] * 5,
+                "atr_14": [10.0] * 5,
+            }
+        )
+        res = compute_target(df, swing_days=3, atr_tp_multi=1.0, atr_sl_multi=1.0)
+        assert res["target"].iloc[0] == 0
+
+    def test_same_tf_same_bar_sl_wins_tiebreak(self) -> None:
+        """(d) Both TP and SL touched in the SAME bar → SL wins tie-break (-1)."""
+        df = pd.DataFrame(
+            {
+                "close": [100.0, 100.0, 100.0, 100.0, 100.0],
+                "high":  [101.0, 115.0, 101.0, 101.0, 101.0],
+                "low":   [99.0,  85.0,  99.0,  99.0,  99.0],
+                "atr_14": [10.0] * 5,
+            }
+        )
+        res = compute_target(df, swing_days=3, atr_tp_multi=1.0, atr_sl_multi=1.0)
+        assert res["target"].iloc[0] == -1
 
     def test_lower_tf_df_does_not_add_extra_columns(self) -> None:
         """lower_tf path must NOT add max_high_future or min_low_future to df."""
@@ -303,15 +359,15 @@ class TestFindOptimalThreshold:
         mock_model = MagicMock()
         probas = np.column_stack(
             [
-                np.zeros(50),
-                np.linspace(0.4, 0.9, 50),
+                np.zeros(100),
+                np.ones(100) * 0.60,
             ]
         )
         mock_model.predict_proba.return_value = probas
-        X_val = pd.DataFrame({"f1": range(50)})
-        y_val = pd.Series([1] * 30 + [0] * 20)
+        X_val = pd.DataFrame({"f1": range(100)})
+        y_val = pd.Series([1] * 70 + [0] * 30)
         prices_val = pd.DataFrame(
-            {"close": [100.0] * 50, "atr_14": [5.0] * 50}, index=range(50)
+            {"close": [100.0] * 100, "atr_14": [5.0] * 100}, index=range(100)
         )
 
         threshold, profit = find_optimal_threshold(
