@@ -65,18 +65,67 @@ def _resolve_targets_numba(
             ltf_idx += 1
         
         j = ltf_idx
-        label = 0 
+        label = 0  # "Timeout"
         while j < n_ltf and ltf_times[j] <= window_end:
             if ltf_lows[j] <= sl_prices[i]:
-                label = 0
+                label = -1  # Stop Loss
                 break
             if ltf_highs[j] >= tp_prices[i]:
-                label = 1
+                label = 1   # 1 Take Profit
                 break
             j += 1
             
         targets[i] = label
         
+    return targets
+
+
+@njit
+def _resolve_targets_same_tf(
+    tp_prices: np.ndarray,
+    sl_prices: np.ndarray,
+    highs: np.ndarray,
+    lows: np.ndarray,
+    swing_days: int,
+    n: int,
+) -> np.ndarray:
+    """Numba JIT core for same-timeframe target resolution.
+
+    Scans future bars chronologically (bar-by-bar) for each signal bar i up to
+    swing_days bars ahead. The first level touched (TP or SL) determines the target:
+      - 1: Take Profit reached first.
+      - -1: Stop Loss reached first.
+      - 0: Timeout (neither level hit within swing_days bars, or trailing window).
+
+    Tie-break rule: If both SL and TP are touched in the same bar j, SL (lows[j] <= sl)
+    is checked first and wins (-1), matching _resolve_targets_numba.
+
+    For rows near the end of the array (i >= n - swing_days), scanning stops at index n - 1.
+    If neither level is reached in the remaining available bars, target defaults to 0.
+
+    Args:
+        tp_prices: Array of Take Profit price targets.
+        sl_prices: Array of Stop Loss price targets.
+        highs: Array of High prices.
+        lows: Array of Low prices.
+        swing_days: Number of future bars to scan.
+        n: Total number of bars (len of array).
+
+    Returns:
+        Array of targets (int32).
+    """
+    targets = np.zeros(n, dtype=np.int32)
+    for i in range(n):
+        label = 0
+        max_j = min(i + swing_days + 1, n)
+        for j in range(i + 1, max_j):
+            if lows[j] <= sl_prices[i]:
+                label = -1
+                break
+            if highs[j] >= tp_prices[i]:
+                label = 1
+                break
+        targets[i] = label
     return targets
 
 
@@ -124,8 +173,13 @@ def _compute_threshold_loop(
             if proba[i] >= thresh:
                 if y_arr[i] == 1:
                     profit += (atr[i] * tp_val) / close[i] - cost_per_trade
-                else:
+                elif y_arr[i] == -1:
                     profit -= (atr[i] * sl_val) / close[i] + cost_per_trade
+                else:
+                    # Timeout: Cierre a mercado en la última barra del swing
+                    exit_idx = min(i + swing_period, n - 1)
+                    profit += (close[exit_idx] - close[i]) / close[i] - cost_per_trade
+                
                 trade_count += 1
                 i += swing_period
             else:
@@ -185,9 +239,17 @@ def _simulate_fitness_sequential(
             if y_arr[i] == 1:
                 ret = (atr[i] * tp_val) / close[i] - cost_per_trade
                 gross_profit += ret
-            else:
+            elif y_arr[i] == -1:
                 ret = -((atr[i] * sl_val) / close[i]) - cost_per_trade
                 gross_loss += abs(ret)
+            else:
+                # Timeout
+                exit_idx = min(i + swing_period, n - 1)
+                ret = (close[exit_idx] - close[i]) / close[i] - cost_per_trade
+                if ret > 0:
+                    gross_profit += ret
+                else:
+                    gross_loss += abs(ret)
                 
             trade_count += 1
             
@@ -246,8 +308,11 @@ def _train_core(
     ts = get_trading_settings()
     fee_rate: float = ts["fee_rate"]
     slippage: float = ts["slippage"]
+    
+    y_train_xgb = (y_train == 1).astype(int)
+    y_val_xgb = (y_val == 1).astype(int)
 
-    imbalance = sum(y_train == 0) / sum(y_train == 1) if sum(y_train == 1) > 0 else 1
+    imbalance = sum(y_train_xgb == 0) / sum(y_train_xgb == 1) if sum(y_train_xgb == 1) > 0 else 1
 
     model = xgb.XGBClassifier(
         n_estimators=hp["n_estimators"],
@@ -260,7 +325,7 @@ def _train_core(
         random_state=42,
         n_jobs=n_jobs,
     )
-    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+    model.fit(X_train, y_train_xgb, eval_set=[(X_val, y_val_xgb)], verbose=False)
 
     best_threshold, _ = find_optimal_threshold(
         model, X_val, y_val, tp_val, sl_val, prices_val, fee_rate, slippage,
@@ -423,13 +488,23 @@ def compute_target(
         df["target"] = targets
 
     else:
-        # --- Vectorized Fallback (bar-count based) --------------------------
-        df["max_high_future"] = df["high"].rolling(window=swing_days).max().shift(-swing_days)
-        df["min_low_future"] = df["low"].rolling(window=swing_days).min().shift(-swing_days)
+        # --- Same-Timeframe Fallback (Numba Bar-by-Bar Chronological) -------
+        tp_prices_arr = tp_price.values
+        sl_prices_arr = sl_price.values
+        highs_arr = df["high"].values
+        lows_arr = df["low"].values
+        n = len(df)
 
-        df["target"] = (
-            (df["max_high_future"] >= tp_price) & (df["min_low_future"] > sl_price)
-        ).astype(int)
+        targets = _resolve_targets_same_tf(
+            tp_prices=tp_prices_arr,
+            sl_prices=sl_prices_arr,
+            highs=highs_arr,
+            lows=lows_arr,
+            swing_days=int(swing_days),
+            n=n,
+        )
+
+        df["target"] = targets
 
     return df
 
@@ -507,7 +582,8 @@ def find_optimal_threshold(
     y_arr: np.ndarray = y_val.values
     n: int = len(proba)
 
-    min_trades = max(5, int(n / (swing_period + 15)))
+    max_possible_trades = max(1.0, n / swing_period)
+    min_trades = max(10, int(max_possible_trades * 0.15))
 
     best_threshold, best_profit = _compute_threshold_loop(
         proba=proba,
@@ -735,10 +811,11 @@ def train_and_evaluate(
         model, X_test, y_test, prices_test, tp_val, sl_val, fee_rate, slippage,
         best_threshold, swing_period=swing_period,
     )
-
-    prec_test: float = precision_score(y_test, preds_test, zero_division=0)
+    
+    y_test_xgb = (y_test == 1).astype(int)
+    prec_test: float = precision_score(y_test_xgb, preds_test, zero_division=0)
     test_signals = int(sum(preds_test))
-    test_hits = int(sum((preds_test == 1) & (y_test == 1)))
+    test_hits = int(sum((preds_test == 1) & (y_test_xgb == 1)))
 
     net_profit_test = test_fit_metrics["gross_profit"] - test_fit_metrics["gross_loss"]
 

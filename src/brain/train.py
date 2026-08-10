@@ -93,9 +93,9 @@ def train_factory(
     cleanup_columns(df)
 
     X = df[features_list]
-    y = df["target"]
+    y_binary = (df["target"] == 1).astype(int)
 
-    imbalance = sum(y == 0) / sum(y == 1) if sum(y == 1) > 0 else 1
+    imbalance = sum(y_binary == 0) / sum(y_binary == 1) if sum(y_binary == 1) > 0 else 1
 
     hp_n_estimators: int = config["n_estimators"]
     hp_max_depth: int = config["max_depth"]
@@ -121,11 +121,11 @@ def train_factory(
     holdout_size = min(30, int(len(X) * 0.1))
     if holdout_size >= 10:
         X_fit, X_hold = X.iloc[:-holdout_size], X.iloc[-holdout_size:]
-        y_fit, y_hold = y.iloc[:-holdout_size], y.iloc[-holdout_size:]
+        y_fit, y_hold = y_binary.iloc[:-holdout_size], y_binary.iloc[-holdout_size:]
         model.set_params(early_stopping_rounds=10)
         model.fit(X_fit, y_fit, eval_set=[(X_hold, y_hold)], verbose=False)
     else:
-        model.fit(X, y, verbose=False)
+        model.fit(X, y_binary, verbose=False)
 
     production_bundle: dict[str, Any] = {
         "model": model,
