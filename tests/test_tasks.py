@@ -154,6 +154,7 @@ def _make_model_dict(proba: float = 0.8, threshold: float = 0.6) -> dict[str, An
         "atr_tp_multi": 2.0,
         "atr_sl_multi": 1.0,
         "strategy_name": "TestStrategy",
+        "timeframe": "1d",
     }
 
 
