@@ -19,6 +19,7 @@ Run:  python3 tools/diagnose_timeframe_data.py
 import sys
 from pathlib import Path
 
+import argparse
 import numpy as np
 import pandas as pd
 
@@ -27,15 +28,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.brain.data_fetcher import get_fear_and_greed
 from src.brain.features import add_sentiment, compute_all_technicals
-from src.utils.data_splits import compute_dynamic_split, compute_split_boundaries
+from src.utils.data_splits import (
+    compute_dynamic_split,
+    compute_split_boundaries,
+    get_calibrated_constants,
+)
 from src.utils.helpers import compute_target, load_csv_data
 from src.utils.timeframe_utils import parse_timeframe_hours
 
 SYMBOL = "BTC_USDT"
-TIMEFRAME = "4h"
-SWING = 10
-TP = 1.5
-SL = 1.0
+TP = 1.0
+SL = 2.0
 
 # Feature columns produced by compute_all_technicals + add_sentiment
 # (excluding OHLCV raw columns and the target itself).
@@ -49,9 +52,16 @@ FEATURE_COLS = [
 
 
 def main() -> None:
-    print(f"=== Level-1 diagnostic: {SYMBOL} / {TIMEFRAME} ===\n")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timeframe", default="4h")
+    parser.add_argument("--swing", type=int, default=10)
+    args = parser.parse_args()
+    timeframe = args.timeframe
+    swing = args.swing
 
-    df = load_csv_data(SYMBOL, TIMEFRAME)
+    print(f"=== Level-1 diagnostic: {SYMBOL} / {timeframe} ===\n")
+
+    df = load_csv_data(SYMBOL, timeframe)
     print(f"Loaded {len(df)} bars from CSV "
           f"({df.index.min()} -> {df.index.max()})")
     print(f"Index dtype after load_csv_data: {df.index.dtype}\n")
@@ -65,8 +75,8 @@ def main() -> None:
     print(f"has_sentiment={has_sentiment}, "
           f"index dtype after add_sentiment: {df.index.dtype}\n")
 
-    compute_target(df, swing_days=SWING, atr_tp_multi=TP, atr_sl_multi=SL,
-                   timeframe_hours=parse_timeframe_hours(TIMEFRAME))
+    compute_target(df, swing_days=swing, atr_tp_multi=TP, atr_sl_multi=SL,
+                   timeframe_hours=parse_timeframe_hours(timeframe))
 
     # ------------------------------------------------------------------
     # (a) Per-feature % NaN and % exactly-0
@@ -122,17 +132,21 @@ def main() -> None:
     # (d) Val vs test regime comparison
     # ------------------------------------------------------------------
     print("--- (d) Val vs test regime ---")
-    # Reproduce the same split the optimizer uses (worst-case swing=10).
     df_clean = df.dropna(subset=["target"]).copy()
+    cal = get_calibrated_constants(timeframe)
     split = compute_dynamic_split(
-        n_bars=len(df_clean), swing_period=SWING, embargo_days=SWING,
+        n_bars=len(df_clean), swing_period=swing, embargo_days=swing,
+        bars_per_trade_safety_factor=cal["bars_per_trade_safety_factor"],
+        min_val_trades=cal["stat_floor_val_trades"],
+        min_test_trades=cal["stat_floor_test_trades"],
+        max_val_test_share=cal["max_val_test_share"],
     )
     if split is None:
         print("compute_dynamic_split returned None — cannot compare regimes.")
     else:
         n_train, n_val, n_test = split
         train_sl, val_sl, test_sl = compute_split_boundaries(
-            n_train, n_val, n_test, embargo_days=SWING,
+            n_train, n_val, n_test, embargo_days=swing,
         )
         close = df_clean["close"]
         for name, sl in [("train", train_sl), ("val", val_sl), ("test", test_sl)]:
