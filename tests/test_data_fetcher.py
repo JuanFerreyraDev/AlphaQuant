@@ -109,7 +109,7 @@ class TestGetFearAndGreedEdgeCases:
 
 
 class TestFetchHistoricalData:
-    @patch("src.brain.data_fetcher.get_project_root")
+    @patch("src.config.paths.get_project_root")
     @patch("src.brain.data_fetcher.get_active_market", return_value="futures")
     @patch("src.brain.data_fetcher.ccxt.binanceusdm")
     def test_returns_dataframe_on_success(
@@ -124,6 +124,7 @@ class TestFetchHistoricalData:
         (tmp_path / "data" / "raw_csv").mkdir(parents=True)
 
         mock_exchange = MagicMock()
+        mock_exchange.timeframes = {"1d": "1d"}
         mock_exchange_cls.return_value = mock_exchange
         mock_exchange.parse8601.return_value = 1577836800000
         candles = [
@@ -151,6 +152,7 @@ class TestFetchHistoricalData:
         import ccxt
 
         mock_exchange = MagicMock()
+        mock_exchange.timeframes = {"1d": "1d"}
         mock_exchange_cls.return_value = mock_exchange
         mock_exchange.parse8601.return_value = 1577836800000
         mock_exchange.fetch_ohlcv.side_effect = ccxt.ExchangeError("symbol not found")
@@ -158,7 +160,7 @@ class TestFetchHistoricalData:
         with pytest.raises(RuntimeError, match="Exchange error downloading"):
             fetch_historical_data("INVALID_USDT")
 
-    @patch("src.brain.data_fetcher.get_project_root")
+    @patch("src.config.paths.get_project_root")
     @patch("src.brain.data_fetcher.get_active_market", return_value="spot")
     @patch("src.brain.data_fetcher.ccxt.binance")
     def test_handles_empty_candles(
@@ -173,6 +175,7 @@ class TestFetchHistoricalData:
         (tmp_path / "data" / "raw_csv").mkdir(parents=True)
 
         mock_exchange = MagicMock()
+        mock_exchange.timeframes = {"1d": "1d"}
         mock_exchange_cls.return_value = mock_exchange
         mock_exchange.parse8601.return_value = 1577836800000
         mock_exchange.fetch_ohlcv.return_value = []
@@ -195,6 +198,7 @@ class TestFetchHistoricalData:
         import ccxt
 
         mock_exchange = MagicMock()
+        mock_exchange.timeframes = {"1d": "1d"}
         mock_exchange_cls.return_value = mock_exchange
         mock_exchange.parse8601.return_value = 1577836800000
         mock_exchange.fetch_ohlcv.side_effect = ccxt.NetworkError("timeout")

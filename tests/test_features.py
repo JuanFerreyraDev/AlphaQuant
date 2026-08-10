@@ -208,3 +208,83 @@ class TestAddSentiment:
         assert "fng_value" in result_df.columns
         assert "fng_sma_14" in result_df.columns
         assert "fng_vol_14" in result_df.columns
+
+
+class TestAddSentimentSubDaily:
+    """Regression tests for the dynamic-timeframe bug where joining daily
+    Fear & Greed data onto a sub-daily (e.g. 4h) index produced all-NaN
+    ``fng_sma_14``/``fng_vol_14`` columns, which ``cleanup_columns``'s
+    ``dropna()`` then turned into total row loss. See Issue 1 of the
+    dynamic-timeframe regression audit.
+    """
+
+    def test_add_sentiment_4h_no_all_nan_fng_sma(self) -> None:
+        """4h candles (midnight-aligned) must inherit a non-null daily FNG
+        rolling average instead of ending up all-NaN."""
+        dates_4h = pd.date_range("2023-01-01", periods=100, freq="4h")
+        df = pd.DataFrame(
+            {"close": np.random.uniform(100, 200, 100)}, index=dates_4h
+        )
+
+        dates_daily = pd.date_range("2022-12-01", periods=40, freq="D")
+        df_fg = pd.DataFrame(
+            {"fng_value": np.random.uniform(20, 80, 40)}, index=dates_daily
+        )
+
+        result_df, has_sentiment = add_sentiment(df, df_fg)
+
+        assert has_sentiment is True
+        assert not result_df["fng_sma_14"].isna().all()
+        assert not result_df["fng_vol_14"].isna().all()
+        # Most rows (all but the very first daily warmup window) should
+        # have a valid rolling value once joined onto the 4h grid.
+        assert result_df["fng_sma_14"].notna().sum() > 0
+
+    def test_add_sentiment_daily_unchanged(self) -> None:
+        """Daily data behavior is unchanged by the merge_asof rewrite —
+        each daily candle still matches its own FNG entry exactly."""
+        dates = pd.date_range("2023-01-01", periods=30, freq="D")
+        fng_values = np.random.uniform(20, 80, 30)
+        df = pd.DataFrame({"close": np.random.uniform(100, 200, 30)}, index=dates)
+        df_fg = pd.DataFrame({"fng_value": fng_values}, index=dates)
+
+        result_df, has_sentiment = add_sentiment(df, df_fg)
+
+        assert has_sentiment is True
+        np.testing.assert_array_equal(
+            result_df["fng_value"].to_numpy(), fng_values
+        )
+        expected_sma = pd.Series(fng_values).rolling(14).mean().to_numpy()
+        np.testing.assert_array_almost_equal(
+            result_df["fng_sma_14"].to_numpy(), expected_sma
+        )
+
+    def test_add_sentiment_non_midnight_aligned_grid(self) -> None:
+        """Sub-daily candles that never land on 00:00:00 must still inherit
+        a non-null daily FNG rolling average.
+
+        This is the case an exact-index ``.join()`` cannot handle even with
+        pre-computed rolling stats: since no candle timestamp equals a daily
+        FNG timestamp, every row would join to NaN. ``merge_asof`` (backward)
+        picks up the most recent known daily value regardless of alignment,
+        so this test fails under the old join-based implementation and
+        passes with the as-of merge.
+        """
+        dates_offset = pd.date_range(
+            "2023-01-01 02:00:00", periods=100, freq="4h"
+        )
+        df = pd.DataFrame(
+            {"close": np.random.uniform(100, 200, 100)}, index=dates_offset
+        )
+        assert not (dates_offset.hour == 0).any()
+
+        dates_daily = pd.date_range("2022-12-01", periods=40, freq="D")
+        df_fg = pd.DataFrame(
+            {"fng_value": np.random.uniform(20, 80, 40)}, index=dates_daily
+        )
+
+        result_df, has_sentiment = add_sentiment(df, df_fg)
+
+        assert has_sentiment is True
+        assert not result_df["fng_sma_14"].isna().all()
+        assert not result_df["fng_vol_14"].isna().all()

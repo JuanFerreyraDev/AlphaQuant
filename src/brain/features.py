@@ -122,6 +122,16 @@ def compute_all_technicals(df: pd.DataFrame) -> pd.DataFrame:
 def add_sentiment(df: pd.DataFrame, df_fg: pd.DataFrame) -> tuple[pd.DataFrame, bool]:
     """Attempt to add sentiment columns to the DataFrame.
 
+    Uses an as-of (backward) merge rather than an exact-index join so that
+    sub-daily candles (``4h``, ``1h``, etc.) correctly inherit the most
+    recent daily Fear & Greed value regardless of whether the candle grid
+    happens to align with midnight UTC. An exact-index join would leave
+    every non-aligned candle's sentiment columns as NaN — which, combined
+    with ``rolling(14)`` needing 14 non-NaN values in-window, previously
+    produced all-NaN ``fng_sma_14``/``fng_vol_14`` columns for any sub-daily
+    timeframe and caused ``cleanup_columns``'s ``dropna()`` to silently
+    remove every row.
+
     Args:
         df: DataFrame with OHLCV data and technical indicators.
         df_fg: DataFrame containing the Fear and Greed index data.
@@ -130,10 +140,22 @@ def add_sentiment(df: pd.DataFrame, df_fg: pd.DataFrame) -> tuple[pd.DataFrame, 
         Tuple ``(df, has_sentiment)`` indicating whether sentiment was added.
     """
     if not df_fg.empty:
-        df_fg = df_fg[~df_fg.index.duplicated(keep="last")]
-        df = df.join(df_fg, how="left")
-        df["fng_sma_14"] = df["fng_value"].rolling(14).mean()
-        df["fng_vol_14"] = df["fng_value"].rolling(14).std()
+        df_fg = df_fg[~df_fg.index.duplicated(keep="last")].sort_index()
+        df_fg_computed = df_fg.copy()
+        df_fg_computed["fng_sma_14"] = df_fg_computed["fng_value"].rolling(14).mean()
+        df_fg_computed["fng_vol_14"] = df_fg_computed["fng_value"].rolling(14).std()
+
+        df = df.sort_index()
+        df.index = df.index.astype("datetime64[ns]")
+        df_fg_computed.index = df_fg_computed.index.astype("datetime64[ns]")
+
+        df = pd.merge_asof(
+            df,
+            df_fg_computed[["fng_value", "fng_sma_14", "fng_vol_14"]],
+            left_index=True,
+            right_index=True,
+            direction="backward",
+        )
         return df, True
 
     logger.warning("Sentiment data is empty. The arena will be technical-only.")

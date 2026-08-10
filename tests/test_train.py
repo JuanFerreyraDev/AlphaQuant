@@ -72,7 +72,7 @@ class TestTrainFactory:
             json.dumps(SAMPLE_CONFIG), encoding="utf-8"
         )
 
-        with pytest.raises(RuntimeError, match="Data file not found for"):
+        with pytest.raises(RuntimeError, match="not found"):
             train_factory("BTC_USDT")
 
     @patch("src.brain.train.joblib.dump")

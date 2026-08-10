@@ -16,25 +16,38 @@ import pandas as pd
 import xgboost as xgb
 
 from src.brain.features import compute_all_technicals, add_sentiment
-from src.config.settings_loader import get_active_symbols, get_project_root
+from src.config.settings_loader import (
+    get_active_symbols_with_timeframe,
+    get_project_root,
+    get_symbol_timeframe,
+)
 from src.utils.helpers import (
     cleanup_columns,
     compute_target,
     load_csv_data,
 )
+from src.utils.timeframe_utils import parse_timeframe_hours
 
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning, module="xgboost")
 
 
-def train_factory(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
+def train_factory(
+    symbol: str, df_fg: pd.DataFrame | None = None, timeframe: str | None = None
+) -> None:
     """Train a model based on the configuration saved in config.json.
 
     Args:
         symbol: Trading pair (e.g. ``'BTC_USDT'`` or ``'BTC/USDT'``).
         df_fg: Fear & Greed DataFrame (injected by the caller).
+        timeframe: Candle interval for this symbol (e.g. ``'4h'``).
+            If ``None``, resolved from the per-symbol configuration.
     """
+    if timeframe is None:
+        timeframe = get_symbol_timeframe(symbol)
+    tf_hours = parse_timeframe_hours(timeframe)
+
     safe_symbol = symbol.replace("/", "_").replace(":", "_").split("_USDT")[0] + "_USDT"
     base_dir = get_project_root()
     config_path = base_dir / "data" / "models" / safe_symbol / "config.json"
@@ -57,14 +70,15 @@ def train_factory(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
     atr_sl_multi: float = config["atr_sl_multi"]
     swing_period: int = config["swing_period"]
 
-    logger.info("Starting Training Factory for %s...", symbol)
+    logger.info(
+        "Starting Training Factory for %s (timeframe=%s)...", symbol, timeframe
+    )
     logger.info("Strategy: %s", strategy_name)
 
-    filename = f"{safe_symbol}_1d.csv"
     try:
-        df = load_csv_data(filename)
-    except FileNotFoundError:
-        raise RuntimeError(f"Data file not found for {symbol}")
+        df = load_csv_data(safe_symbol, timeframe)
+    except FileNotFoundError as exc:
+        raise RuntimeError(str(exc)) from exc
 
     compute_all_technicals(df)
     df, _ = add_sentiment(df, df_fg if df_fg is not None else pd.DataFrame())
@@ -74,6 +88,7 @@ def train_factory(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
         swing_days=swing_period,
         atr_tp_multi=atr_tp_multi,
         atr_sl_multi=atr_sl_multi,
+        timeframe_hours=tf_hours,
     )
     cleanup_columns(df)
 
@@ -119,6 +134,8 @@ def train_factory(symbol: str, df_fg: pd.DataFrame | None = None) -> None:
         "atr_tp_multi": atr_tp_multi,
         "atr_sl_multi": atr_sl_multi,
         "strategy_name": strategy_name,
+        "timeframe": timeframe,
+        "timeframe_hours": tf_hours,
         "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -147,6 +164,12 @@ if __name__ == "__main__":
         nargs="?",
         help="Symbol to train (e.g.: ETH_USDT). If not provided, uses settings.yaml.",
     )
+    parser.add_argument(
+        "--timeframe",
+        type=str,
+        default=None,
+        help="Candle timeframe (e.g.: 4h, 1d). Uses per-symbol config if not provided.",
+    )
     args = parser.parse_args()
 
     from src.brain.data_fetcher import get_fear_and_greed
@@ -154,21 +177,23 @@ if __name__ == "__main__":
     fng_data = get_fear_and_greed()
 
     if args.symbol:
-        train_factory(args.symbol, fng_data)
+        tf = args.timeframe or get_symbol_timeframe(args.symbol)
+        train_factory(args.symbol, fng_data, tf)
     else:
-        symbols = get_active_symbols()
-        if not symbols:
+        entries = get_active_symbols_with_timeframe()
+        if not entries:
             logger.error("No symbol found in arguments or settings.yaml.")
         else:
-            logger.info("Batch Mode: Training %d models...", len(symbols))
+            logger.info("Batch Mode: Training %d models...", len(entries))
             ok_count = 0
             fail_count = 0
-            for s in symbols:
+            for entry in entries:
                 try:
-                    train_factory(s, fng_data)
+                    tf = args.timeframe or entry["timeframe"]
+                    train_factory(entry["symbol"], fng_data, tf)
                     ok_count += 1
                 except (KeyError, ValueError, IOError) as exc:
-                    logger.error("Error training %s: %s", s, exc)
+                    logger.error("Error training %s: %s", entry["symbol"], exc)
                     fail_count += 1
                     continue
 

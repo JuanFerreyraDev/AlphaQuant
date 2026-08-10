@@ -14,7 +14,9 @@ import pandas as pd
 import xgboost as xgb
 from sklearn.metrics import precision_score
 
+from src.config.paths import get_raw_csv_path
 from src.config.settings_loader import get_project_root, get_trading_settings
+from src.utils.timeframe_utils import parse_timeframe_hours
 
 logger = logging.getLogger(__name__)
 
@@ -287,25 +289,50 @@ def _train_core(
 
 
 # --- DATA LOADING ---
-def load_csv_data(filename: str) -> pd.DataFrame:
+def load_csv_data(symbol: str, timeframe: str = "1d") -> pd.DataFrame:
     """Load an OHLCV CSV and normalize columns / time index.
 
+    Uses the per-symbol directory layout::
+
+        data/raw_csv/{symbol}/{timeframe}.csv
+
+    For daily (``1d``) and coarser timeframes, timestamps are truncated
+    to midnight via ``.dt.normalize()`` for consistent joining with
+    daily sentiment data.  For sub-daily timeframes (``4h``, ``1h``,
+    etc.) the full timestamp is preserved so that distinct intraday
+    candles are not collapsed onto the same index value.
+
     Args:
-        filename: CSV filename inside ``data/raw_csv/``.
+        symbol: Trading pair in safe format (e.g. ``'BTC_USDT'``).
+        timeframe: Candle interval (e.g. ``'1d'``, ``'4h'``).
 
     Returns:
-        DataFrame with a normalized datetime index.
+        DataFrame with a ``DatetimeIndex``.
 
     Raises:
-        FileNotFoundError: If the file does not exist.
+        FileNotFoundError: If the file does not exist. The message names
+            the expected path and the ``data_fetcher`` command to run to
+            fetch it, since a symbol/timeframe can be configured (e.g. in
+            ``bot_state.json``) before the corresponding CSV has actually
+            been downloaded.
     """
-    filepath = get_project_root() / "data" / "raw_csv" / filename
+    filepath = get_raw_csv_path(symbol, timeframe)
     if not filepath.exists():
-        raise FileNotFoundError(f"File not found: {filepath}")
+        raise FileNotFoundError(
+            f"No data found for {symbol} at timeframe {timeframe} "
+            f"(expected {filepath}). Run "
+            f"`python3 -m src.brain.data_fetcher {symbol} --timeframe {timeframe}` "
+            f"first."
+        )
 
     df = pd.read_csv(filepath)
 
-    df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.normalize()
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    # Only normalize (truncate to midnight) for daily or coarser bars.
+    # Sub-daily timeframes need the full timestamp to keep candles unique.
+    tf_hours = parse_timeframe_hours(timeframe)
+    if tf_hours >= 24.0:
+        df["timestamp"] = df["timestamp"].dt.normalize()
     df.set_index("timestamp", inplace=True)
     return df
 
@@ -317,13 +344,17 @@ def compute_target(
     atr_tp_multi: float = 0.0,
     atr_sl_multi: float = 0.0,
     lower_tf_df: Optional[pd.DataFrame] = None,
+    timeframe_hours: float = 24.0,
 ) -> pd.DataFrame:
     """Compute the ``target`` column using dynamic ATR-based TP/SL.
 
     Args:
         df: DataFrame with OHLCV columns and ``atr_14``.  Index must be a
-            timezone-naive ``DatetimeIndex`` (daily bars).
-        swing_days: Number of future days to evaluate TP/SL.
+            timezone-naive ``DatetimeIndex``.
+        swing_days: Number of future **bars** to evaluate TP/SL.  Despite
+            the legacy name (kept for config compatibility), this is
+            interpreted as a bar count — the real-world duration is
+            ``swing_days * timeframe_hours`` hours.
         atr_tp_multi: ATR multiplier for Take Profit.
         atr_sl_multi: ATR multiplier for Stop Loss.
         lower_tf_df: Optional lower-timeframe DataFrame (e.g. 1 h or 15 m)
@@ -332,7 +363,12 @@ def compute_target(
             Take Profit or Stop Loss — is reached first within the
             ``swing_days`` window.  Its columns are **never** added to ``df``
             as XGBoost features.  When ``None`` the function falls back to the
-            daily approximation so the existing data pipeline keeps working.
+            vectorized approximation so the existing data pipeline keeps working.
+        timeframe_hours: Duration of one bar in hours (e.g. ``24.0`` for
+            daily, ``4.0`` for 4 h).  Controls the lookahead window in
+            both the Numba and the vectorized fallback path.  Defaults to
+            ``24.0`` for backward compatibility with the pre-existing daily
+            pipeline.
 
     Returns:
         DataFrame with ``target`` column added in-place.
@@ -366,8 +402,12 @@ def compute_target(
         ltf_highs = lower_tf_df["high"].values
         ltf_lows = lower_tf_df["low"].values
         
-        ns_1_day = pd.Timedelta(days=1).value
-        ns_swing = pd.Timedelta(days=swing_days).value
+        # The window starts one bar after the signal bar and extends
+        # swing_days bars into the future.  For daily data this is
+        # identical to the original pd.Timedelta(days=...) logic; for
+        # sub-daily data it correctly scales the window.
+        ns_1_bar = int(pd.Timedelta(hours=timeframe_hours).value)
+        ns_swing = int(pd.Timedelta(hours=timeframe_hours * swing_days).value)
 
         targets = _resolve_targets_numba(
             daily_times=daily_times,
@@ -376,14 +416,14 @@ def compute_target(
             ltf_times=ltf_times,
             ltf_highs=ltf_highs,
             ltf_lows=ltf_lows,
-            ns_1_day=ns_1_day,
+            ns_1_day=ns_1_bar,
             ns_swing=ns_swing
         )
         
         df["target"] = targets
 
     else:
-        # --- Daily approximation path (Vectorized Fallback) -----------------
+        # --- Vectorized Fallback (bar-count based) --------------------------
         df["max_high_future"] = df["high"].rolling(window=swing_days).max().shift(-swing_days)
         df["min_low_future"] = df["low"].rolling(window=swing_days).min().shift(-swing_days)
 

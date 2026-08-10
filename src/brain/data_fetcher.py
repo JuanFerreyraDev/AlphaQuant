@@ -13,11 +13,13 @@ import ccxt.async_support as ccxt_async
 import pandas as pd
 import requests
 
+from src.config.paths import get_raw_csv_path
 from src.config.settings_loader import (
     get_active_market,
-    get_active_symbols,
+    get_active_symbols_with_timeframe,
     get_project_root,
 )
+from src.utils.timeframe_utils import validate_timeframe
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,8 @@ def fetch_historical_data(
     else:
         logger.info("Downloading %s with timeframe %s (Spot)...", symbol, timeframe)
         exchange = ccxt.binance({"enableRateLimit": True})
+
+    validate_timeframe(timeframe, exchange=exchange)
 
     since_milliseconds: int = exchange.parse8601(start_date)
     all_candles: list[list] = []
@@ -107,17 +111,13 @@ def fetch_historical_data(
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
     df.set_index("timestamp", inplace=True)
 
-    base_dir = get_project_root()
-    folder_path = base_dir / "data" / "raw_csv"
-    folder_path.mkdir(parents=True, exist_ok=True)
-
     safe_symbol = symbol.replace("/", "_").replace(":", "_").split("_USDT")[0] + "_USDT"
-    file_name = f"{safe_symbol}_{timeframe}.csv"
-    full_path = folder_path / file_name
+    full_path = get_raw_csv_path(safe_symbol, timeframe)
+    full_path.parent.mkdir(parents=True, exist_ok=True)
 
     df.to_csv(full_path)
 
-    logger.info("Saved %d days of history to: %s", len(df), full_path)
+    logger.info("Saved %d bars of history to: %s", len(df), full_path)
     return df
 
 
@@ -255,18 +255,31 @@ if __name__ == "__main__":
         nargs="?",
         help="Symbol (e.g.: ETH_USDT). If not provided, uses settings.yaml.",
     )
+    parser.add_argument(
+        "--timeframe",
+        type=str,
+        default=None,
+        help="Candle timeframe (e.g.: 4h, 1d). Uses per-symbol config if not provided.",
+    )
     args = parser.parse_args()
+    
+    from src.utils.logging_config import setup_logging
+    setup_logging()
 
     if args.symbol:
+        from src.config.settings_loader import get_symbol_timeframe
+
+        tf = args.timeframe or get_symbol_timeframe(args.symbol)
         fetch_historical_data(
-            symbol=args.symbol, timeframe="1d", start_date="2020-01-01T00:00:00Z"
+            symbol=args.symbol, timeframe=tf, start_date="2020-01-01T00:00:00Z"
         )
     else:
-        symbols = get_active_symbols()
-        if not symbols:
+        entries = get_active_symbols_with_timeframe()
+        if not entries:
             logger.warning("No symbols found in settings.yaml.")
         else:
-            for s in symbols:
+            for entry in entries:
+                tf = args.timeframe or entry["timeframe"]
                 fetch_historical_data(
-                    symbol=s, timeframe="1d", start_date="2020-01-01T00:00:00Z"
+                    symbol=entry["symbol"], timeframe=tf, start_date="2020-01-01T00:00:00Z"
                 )
