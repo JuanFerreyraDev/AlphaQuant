@@ -41,6 +41,7 @@ from src.config.settings_loader import (
     get_active_symbols,
     get_bot_active,
     get_project_root,
+    get_symbol_timeframe,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ REQUIRED_KEYS: list[str] = [
     "threshold",
     "atr_tp_multi",
     "atr_sl_multi",
+    "timeframe",
 ]
 
 
@@ -155,7 +157,7 @@ def run_full_training_pipeline(symbol: str) -> tuple[bool, str, str]:
     """Execute the complete training pipeline for a symbol.
 
     Strict order:
-      1. ``fetch_historical_data`` — download fresh data.
+      1. ``fetch_historical_data`` — download fresh data for the symbol's timeframe.
       2. ``optimize_strategy`` — search for a new strategy and write
          ``last_trained`` to ``config.json``.
       3. ``train_factory`` — train the model and save the ``.pkl``.
@@ -179,18 +181,19 @@ def run_full_training_pipeline(symbol: str) -> tuple[bool, str, str]:
     if not needs_training:
         logger.info("[Pipeline] Skipping %s: Trained less than %d days ago", safe_symbol, TRAINING_COOLDOWN_DAYS)
         return False, safe_symbol, reason
+    timeframe = get_symbol_timeframe(symbol)
     try:
-        logger.info("[Pipeline] Starting full training pipeline for %s...", safe_symbol)
+        logger.info("[Pipeline] Starting full training pipeline for %s (timeframe=%s)...", safe_symbol, timeframe)
         logger.info("[Pipeline] Step 1/3: Downloading data for %s...", safe_symbol)
-        fetch_historical_data(safe_symbol)
+        fetch_historical_data(safe_symbol, timeframe=timeframe)
 
         df_fg = get_fear_and_greed()
 
         logger.info("[Pipeline] Step 2/3: Optimizing strategy for %s...", safe_symbol)
-        optimize_strategy(safe_symbol, df_fg)
+        optimize_strategy(safe_symbol, df_fg, timeframe=timeframe)
 
         logger.info("[Pipeline] Step 3/3: Training model for %s...", safe_symbol)
-        train_factory(safe_symbol, df_fg)
+        train_factory(safe_symbol, df_fg, timeframe=timeframe)
 
         logger.info("[Pipeline] Pipeline complete for %s.", safe_symbol)
     except RuntimeError as exc:
@@ -345,6 +348,7 @@ async def _evaluate_model(
     threshold: float = model_dict["threshold"]
     atr_tp_multi: float = model_dict["atr_tp_multi"]
     atr_sl_multi: float = model_dict["atr_sl_multi"]
+    timeframe: str = model_dict.get("timeframe", "1d")  # Fallback just in case
     strategy_name: str = model_dict.get("strategy_name", model_name.replace(".pkl", ""))
 
     if not model or not features:
@@ -352,7 +356,7 @@ async def _evaluate_model(
         return 0
 
     df = await fetch_ohlcv_binance(
-        safe_symbol, timeframe="1d", limit=100, exchange=exchange
+        safe_symbol, timeframe=timeframe, limit=100, exchange=exchange
     )
     if df is None or df.empty:
         logger.warning("Missing or empty data for %s.", safe_symbol)
