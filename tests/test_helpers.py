@@ -38,9 +38,9 @@ def sample_ohlcv_csv(tmp_path: Path) -> Path:
             "volume": np.random.uniform(1000, 5000, 100),
         }
     )
-    csv_dir = tmp_path / "data" / "raw_csv"
+    csv_dir = tmp_path / "data" / "raw_csv" / "TEST_USDT"
     csv_dir.mkdir(parents=True)
-    csv_path = csv_dir / "TEST_USDT_1d.csv"
+    csv_path = csv_dir / "1d.csv"
     df.to_csv(csv_path, index=False)
     return tmp_path
 
@@ -49,8 +49,8 @@ class TestLoadCsvData:
     def test_loads_valid_csv(self, sample_ohlcv_csv: Path) -> None:
         from unittest.mock import patch
 
-        with patch("src.utils.helpers.get_project_root", return_value=sample_ohlcv_csv):
-            df = load_csv_data("TEST_USDT_1d.csv")
+        with patch("src.config.paths.get_project_root", return_value=sample_ohlcv_csv):
+            df = load_csv_data("TEST_USDT", "1d")
             assert isinstance(df, pd.DataFrame)
             assert "close" in df.columns
             assert df.index.name == "timestamp"
@@ -59,7 +59,7 @@ class TestLoadCsvData:
         from unittest.mock import patch
 
         with patch("src.utils.helpers.get_project_root", return_value=tmp_path):
-            with pytest.raises(FileNotFoundError):
+            with pytest.raises(FileNotFoundError, match="data_fetcher"):
                 load_csv_data("NONEXISTENT.csv")
 
 
@@ -250,6 +250,33 @@ class TestCleanupColumns:
 
         assert len(result) == 2
         assert not result.isna().any().any()
+
+    def test_no_row_loss_when_all_feature_columns_are_healthy(self) -> None:
+        """Regression test: if every feature column is fully populated (no
+        NaN), cleanup_columns must not drop any rows. This guards against
+        the dynamic-timeframe Issue 1 regression, where an all-NaN
+        sentiment column (fng_sma_14/fng_vol_14, produced by joining daily
+        Fear & Greed data onto a sub-daily index) caused dropna() to
+        silently remove every single row instead of just the expected
+        warmup rows.
+        """
+        n = 50
+        df = pd.DataFrame(
+            {
+                "rsi_14": np.random.uniform(20, 80, n),
+                "macd": np.random.randn(n),
+                "adx_14": np.random.uniform(10, 50, n),
+                "atr_14": np.random.uniform(1, 10, n),
+                "fng_value": np.random.uniform(0, 100, n),
+                "fng_sma_14": np.random.uniform(0, 100, n),
+                "fng_vol_14": np.random.uniform(0, 20, n),
+                "target": np.random.randint(0, 2, n),
+            }
+        )
+
+        result = cleanup_columns(df)
+
+        assert len(result) == n
 
 
 class TestFindOptimalThreshold:
@@ -523,3 +550,81 @@ class TestTrainAndEvaluate:
                 prices_test=prices_test, hyperparams=SAMPLE_HIPERPARAMS
             )
         assert result is not None
+
+    def test_train_and_evaluate_val_only_returns_expected_tuple(
+        self, ohlcv_df_with_technicals: pd.DataFrame
+    ) -> None:
+        """train_and_evaluate_val_only returns (model, metrics, threshold)."""
+        from src.utils.helpers import train_and_evaluate_val_only
+        df = ohlcv_df_with_technicals.copy()
+        df["target"] = np.random.randint(0, 2, len(df))
+        df.dropna(inplace=True)
+        features = ["rsi_14", "macd"]
+        n = len(df)
+        split = int(n * 0.7)
+
+        X_train = df[features].iloc[:split]
+        X_val = df[features].iloc[split:]
+        y_train = df["target"].iloc[:split]
+        y_val = df["target"].iloc[split:]
+        prices_val = df[["close", "atr_14"]].iloc[split:]
+
+        with patch(
+            "src.utils.helpers.get_trading_settings",
+            return_value={"fee_rate": 0.001, "slippage": 0.0005},
+        ):
+            result = train_and_evaluate_val_only(
+                X_train, X_val, y_train, y_val,
+                tp_val=2.0, sl_val=1.0, prices_val=prices_val,
+                hyperparams=SAMPLE_HIPERPARAMS, swing_period=5
+            )
+        
+        assert len(result) == 3
+        model, metrics, threshold = result
+        assert hasattr(model, "predict_proba")
+        assert isinstance(metrics, dict)
+        assert isinstance(threshold, float)
+
+    @patch("src.utils.helpers._train_core")
+    def test_train_and_evaluate_with_valid_threshold_calculates_test_metrics(
+        self, mock_train_core, ohlcv_df_with_technicals: pd.DataFrame
+    ) -> None:
+        """When a valid threshold is found, test metrics are calculated correctly."""
+        df = ohlcv_df_with_technicals.copy()
+        df["target"] = np.random.randint(0, 2, len(df))
+        df.dropna(inplace=True)
+        features = ["rsi_14", "macd"]
+        n = len(df)
+        split = int(n * 0.6)
+        val_split = int(n * 0.8)
+
+        X_train = df[features].iloc[:split]
+        X_val = df[features].iloc[split:val_split]
+        X_test = df[features].iloc[val_split:]
+        y_train = df["target"].iloc[:split]
+        y_val = df["target"].iloc[split:val_split]
+        y_test = df["target"].iloc[val_split:]
+        prices_val = df[["close", "atr_14"]].iloc[split:val_split]
+        prices_test = df[["close", "atr_14"]].iloc[val_split:]
+
+        mock_model = MagicMock()
+        mock_model.predict_proba.side_effect = lambda X: np.array([[0.1, 0.9]] * len(X))
+        val_metrics = {"val_profit_factor": 2.0}
+        
+        # _train_core returns (model, best_threshold, val_metrics)
+        mock_train_core.return_value = (mock_model, 0.5, val_metrics)
+
+        with patch(
+            "src.utils.helpers.get_trading_settings",
+            return_value={"fee_rate": 0.001, "slippage": 0.0005},
+        ):
+            result = train_and_evaluate(
+                X_train, X_val, X_test, y_train, y_val, y_test,
+                tp_val=2.0, sl_val=1.0, prices_val=prices_val,
+                prices_test=prices_test, hyperparams=SAMPLE_HIPERPARAMS
+            )
+
+        model, metrics, preds_test, buy_dates, threshold = result
+        assert threshold == 0.5
+        assert metrics["val_profit_factor"] == 2.0
+        assert "test_profit_factor" in metrics
