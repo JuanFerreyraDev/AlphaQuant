@@ -251,6 +251,111 @@ def compute_split_boundaries(
     )
 
 
+def compute_train_val_split(
+    n_bars: int,
+    swing_period: int,
+    embargo_days: int,
+    min_val_trades: int = STAT_FLOOR_VAL_TRADES,
+    min_train_bars: int = TECH_FLOOR_TRAIN_BARS,
+    bars_per_trade_safety_factor: int = DEFAULT_BARS_PER_TRADE_SAFETY_FACTOR,
+    max_val_share: float = MAX_VAL_TEST_SHARE,
+) -> tuple[int, int] | None:
+    """Compute train/val bar counts for a 2-part split (no test set).
+
+    Guarantees minimum validation trade count, a temporal embargo gap
+    between train and val, AND a train-protective split shape. Used when
+    the test role is fulfilled by external OOS data (e.g. walk-forward
+    validation windows), avoiding the unnecessary train-size penalty of
+    reserving a third test block inside the prior-data partition.
+
+    A single embargo gap is reserved (train→val) so that no label
+    computed with a forward-looking window can leak across the split
+    boundary. The caller is responsible for leaving that gap unused
+    when slicing the DataFrame — use ``compute_split_boundaries`` with
+    ``n_test=0`` and discard the (empty) returned test slice.
+
+    val takes the LARGER of its trade-count floor (in bars) and its
+    percentage floor (VAL_PCT_FLOOR) — this keeps proportions sensible
+    on large datasets while still guaranteeing enough trades on small
+    ones. But if the trade-count floor alone would push val past
+    ``max_val_share`` of the allocatable bars, the split is rejected
+    rather than silently starving train.
+
+    Args:
+        n_bars: Total number of bars available.
+        swing_period: Cooldown bars per trade. Controls trade density.
+        embargo_days: Bars to reserve as a gap between train and val.
+            Should be >= the swing/lookahead window used to compute
+            targets, so labels near a boundary never peek across it.
+        min_val_trades: Minimum trades required in the validation set.
+        min_train_bars: Hard floor for training bars regardless of
+            trade count. Default 200.
+        bars_per_trade_safety_factor: Conservative multiplier on
+            swing_period used to estimate how many bars are needed per
+            realized trade when allocating val bars. Higher values
+            assume a lower signal rate and therefore reserve MORE bars
+            for val to reach the requested min_val_trades in practice.
+        max_val_share: Ceiling on n_val / allocatable.
+            Default 0.45, i.e. train keeps at least ~55% of usable bars.
+
+    Returns:
+        Tuple ``(n_train, n_val)`` or ``None`` if there is not enough
+        data to satisfy all minimums simultaneously.
+    """
+    bars_per_trade_estimate = swing_period * bars_per_trade_safety_factor
+
+    val_bars_needed = min_val_trades * bars_per_trade_estimate
+    embargo_total = embargo_days
+    total_needed = min_train_bars + val_bars_needed + embargo_total
+
+    if n_bars < total_needed:
+        logger.warning(
+            "Insufficient data for train/val split: "
+            "n_bars=%d, needed=%d (train=%d, val=%d, embargo=%d) "
+            "with swing_period=%d",
+            n_bars, total_needed,
+            min_train_bars, val_bars_needed, embargo_total,
+            swing_period,
+        )
+        return None
+
+    allocatable = n_bars - embargo_total
+
+    n_val = max(val_bars_needed, int(allocatable * VAL_PCT_FLOOR))
+
+    if n_val > allocatable * max_val_share:
+        logger.warning(
+            "Trade-count floor would push val to %.0f%% of "
+            "allocatable bars (cap=%.0f%%): val=%d allocatable=%d "
+            "(swing_period=%d, min_val_trades=%d). "
+            "This would starve train — skipping instead of shipping "
+            "an unbalanced split.",
+            n_val / allocatable * 100, max_val_share * 100,
+            n_val, allocatable,
+            swing_period, min_val_trades,
+        )
+        return None
+
+    n_train = allocatable - n_val
+
+    if n_train < min_train_bars:
+        logger.warning(
+            "Train/val split would leave only %d train bars (min=%d) "
+            "after reserving embargo=%d. Skipping.",
+            n_train, min_train_bars, embargo_total,
+        )
+        return None
+
+    logger.debug(
+        "Train/val split — bars: total=%d train=%d (%.0f%%) val=%d (%.0f%%) "
+        "embargo=%d (swing_period=%d)",
+        n_bars, n_train, n_train / allocatable * 100,
+        n_val, n_val / allocatable * 100,
+        embargo_days, swing_period,
+    )
+    return n_train, n_val
+
+
 def compute_min_val_trades(
     n_val_bars: int,
     swing_period: int,
