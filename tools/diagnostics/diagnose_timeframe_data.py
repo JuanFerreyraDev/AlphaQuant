@@ -13,7 +13,7 @@ compute_target ONCE (swing=10, tp=1.5, sl=1.0), and reports:
   e) Per-feature point-biserial correlation with target on the train
      split (cheap signal proxy, no model training).
 
-Run:  python3 tools/diagnose_timeframe_data.py
+Run:  python3 tools/diagnostics/diagnose_timeframe_data.py
 """
 
 import sys

@@ -6,7 +6,7 @@ strategy construction, and model training/evaluation.
 
 import logging
 import math
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
 from numba import njit
@@ -351,7 +351,6 @@ def _train_core(
     }
 
     return model, best_threshold, val_metrics
-
 
 # --- DATA LOADING ---
 def load_csv_data(symbol: str, timeframe: str = "1d") -> pd.DataFrame:
@@ -837,3 +836,146 @@ def train_and_evaluate(
     buy_dates_all = buy_dates_val + buy_dates_test
 
     return model, metrics, preds_test, buy_dates_all, best_threshold
+
+
+# --- MODEL TRAINING FACTORIES FOR WALK-FORWARD VALIDATION ---
+# Recommended threshold_grid for each factory:
+#   - Binary homerun: sigmoid output, standard (0.50, 0.85, 0.01)
+#   - Multiclass 3: softmax 3-way split, TP class rarely exceeds ~0.39
+BINARY_HOMERUN_THRESHOLD_GRID: tuple[float, float, float] = (0.50, 0.85, 0.01)
+MULTICLASS_3_THRESHOLD_GRID: tuple[float, float, float] = (0.25, 0.70, 0.01)
+
+
+def train_predict_binary_homerun(
+    X_train: pd.DataFrame,
+    y_train_raw: pd.Series,
+    X_val: pd.DataFrame,
+    y_val_raw: pd.Series,
+    **kwargs: Any,
+) -> tuple[xgb.XGBClassifier, np.ndarray, Callable[[xgb.XGBClassifier, pd.DataFrame], np.ndarray]]:
+    """Train a binary XGBoost model isolating Take Profit against all other outcomes.
+
+    This formulation treats the problem as a "home run" binary classification,
+    where hitting the Take Profit is class 1, and hitting the Stop Loss or
+    timing out is class 0. It handles class imbalance using `scale_pos_weight`.
+
+    Recommended ``threshold_grid`` for run_walk_forward:
+        ``BINARY_HOMERUN_THRESHOLD_GRID`` = (0.50, 0.85, 0.01)
+
+    Args:
+        X_train: Training features DataFrame.
+        y_train_raw: Training ternary targets Series (-1, 0, 1).
+        X_val: Validation features DataFrame.
+        y_val_raw: Validation ternary targets Series (-1, 0, 1).
+        **kwargs: Additional keyword arguments (e.g., random_state).
+
+    Returns:
+        A tuple containing:
+            - The fitted XGBClassifier.
+            - An array of validation probabilities for class 1 (Take Profit).
+            - A prediction closure to be used for OOS inference.
+    """
+    y_tr = (y_train_raw == 1).astype(int)
+    y_va = (y_val_raw == 1).astype(int)
+
+    n_pos = max(1, int((y_tr == 1).sum()))
+    spw = int((y_tr == 0).sum()) / n_pos
+
+    model = xgb.XGBClassifier(
+        n_estimators=100,
+        max_depth=3,
+        learning_rate=0.05,
+        objective="binary:logistic",
+        scale_pos_weight=spw,
+        early_stopping_rounds=10,
+        eval_metric="logloss",
+        tree_method="hist",
+        random_state=kwargs.get("random_state", 42),
+        n_jobs=-1,
+    )
+
+    model.fit(X_train, y_tr, eval_set=[(X_val, y_va)], verbose=False)
+
+    def predict_fn(mod: xgb.XGBClassifier, X: pd.DataFrame) -> np.ndarray:
+        return mod.predict_proba(X)[:, 1]
+
+    return model, predict_fn(model, X_val), predict_fn
+
+
+train_predict_binary_homerun.threshold_grid = BINARY_HOMERUN_THRESHOLD_GRID  # type: ignore[attr-defined]
+
+
+def train_predict_multiclass_3(
+    X_train: pd.DataFrame,
+    y_train_raw: pd.Series,
+    X_val: pd.DataFrame,
+    y_val_raw: pd.Series,
+    **kwargs: Any,
+) -> tuple[xgb.XGBClassifier, np.ndarray, Callable[[xgb.XGBClassifier, pd.DataFrame], np.ndarray]]:
+    """Train a 3-class XGBoost model mapping outcomes to Stop Loss, Timeout, and Take Profit.
+
+    This formulation explicitly models the three possible outcomes of a trade
+    using a `multi:softprob` objective. It balances classes using individual
+    sample weights based on class frequency.
+
+    Recommended ``threshold_grid`` for run_walk_forward:
+        ``MULTICLASS_3_THRESHOLD_GRID`` = (0.25, 0.70, 0.01)
+    The softmax of 3 classes rarely exceeds ~0.39 for the TP class, so the
+    default binary grid (0.50, 0.85, 0.01) will yield zero trades at every
+    threshold and silently fail with ``threshold_failed``.
+
+    Args:
+        X_train: Training features DataFrame.
+        y_train_raw: Training ternary targets Series (-1, 0, 1).
+        X_val: Validation features DataFrame.
+        y_val_raw: Validation ternary targets Series (-1, 0, 1).
+        **kwargs: Additional keyword arguments (e.g., random_state).
+
+    Returns:
+        A tuple containing:
+            - The fitted XGBClassifier.
+            - An array of validation probabilities for class 2 (Take Profit).
+            - A prediction closure to be used for OOS inference.
+    """
+    raw_to_cls = {-1: 0, 0: 1, 1: 2}
+    y_tr = y_train_raw.map(raw_to_cls).astype(int).values
+    y_va = y_val_raw.map(raw_to_cls).astype(int).values
+
+    classes, counts = np.unique(y_tr, return_counts=True)
+    w_dict = {
+        int(c): len(y_tr) / (len(classes) * max(1, cnt))
+        for c, cnt in zip(classes, counts)
+    }
+
+    w_tr = np.array([w_dict[int(c)] for c in y_tr], dtype=np.float64)
+    w_va = np.array([w_dict[int(c)] for c in y_va], dtype=np.float64)
+
+    model = xgb.XGBClassifier(
+        n_estimators=100,
+        max_depth=3,
+        learning_rate=0.05,
+        objective="multi:softprob",
+        num_class=3,
+        early_stopping_rounds=10,
+        eval_metric="mlogloss",
+        tree_method="hist",
+        random_state=kwargs.get("random_state", 42),
+        n_jobs=-1,
+    )
+
+    model.fit(
+        X_train,
+        y_tr,
+        sample_weight=w_tr,
+        eval_set=[(X_val, y_va)],
+        sample_weight_eval_set=[w_va],
+        verbose=False,
+    )
+
+    def predict_fn(mod: xgb.XGBClassifier, X: pd.DataFrame) -> np.ndarray:
+        return mod.predict_proba(X)[:, 2]
+
+    return model, predict_fn(model, X_val), predict_fn
+
+
+train_predict_multiclass_3.threshold_grid = MULTICLASS_3_THRESHOLD_GRID  # type: ignore[attr-defined]
