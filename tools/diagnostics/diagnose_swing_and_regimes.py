@@ -9,7 +9,7 @@ additional ~1-year historical windows outside the production split
 (bear, range, bull regimes) to check whether the model's edge over naive
 is consistent across regimes or specific to the current val/test partition.
 
-Run:  python3 tools/diagnose_swing_and_regimes.py
+Run:  python3 tools/diagnostics/diagnose_swing_and_regimes.py
 """
 
 import sys

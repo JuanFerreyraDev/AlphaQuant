@@ -30,7 +30,7 @@ on P(TP) >= thr, identical grid to find_optimal_threshold.
 Also reports bootstrap OOS deltas on oos_val_2024H2 and oos_test_2025
 (model trained only on bars prior to each window).
 
-Run:  .venv/bin/python tools/diagnostics/compare_binary_vs_multiclass.py
+Run:  python3 tools/diagnostics/compare_binary_vs_multiclass.py
 """
 
 from __future__ import annotations

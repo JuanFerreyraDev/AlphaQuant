@@ -9,7 +9,7 @@ Also reports the ATR-as-%-of-price distribution on 1h to sanity-check
 whether the tp=1.5/sl=1.0 ratio still makes economic sense at this
 timeframe (vs the round-trip cost of 0.3%).
 
-Run:  python3 tools/diagnose_timeframe_swing_sweep.py
+Run:  python3 tools/diagnostics/diagnose_timeframe_swing_sweep.py
 """
 
 import argparse

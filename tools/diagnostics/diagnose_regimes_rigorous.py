@@ -13,7 +13,7 @@ Corrects the methodological issues in the previous Part B:
     interval of the model-vs-naive delta, to tell whether the observed
     delta is distinguishable from zero given the sample size.
 
-Run:  python3 tools/diagnose_regimes_rigorous.py
+Run:  python3 tools/diagnostics/diagnose_regimes_rigorous.py
 """
 
 import sys

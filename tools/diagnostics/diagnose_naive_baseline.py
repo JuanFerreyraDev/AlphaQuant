@@ -10,7 +10,7 @@ config, on val and test separately. Also trains the actual winning-config
 model to compare its signals against the naive baseline and against
 ema_50 trend.
 
-Run:  python3 tools/diagnose_naive_baseline.py
+Run:  python3 tools/diagnostics/diagnose_naive_baseline.py
 """
 
 import sys
