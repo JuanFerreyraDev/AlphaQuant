@@ -77,6 +77,25 @@ class TestComputeAllTechnicals:
         for col in original_cols:
             assert col in result.columns
 
+    def test_returns_dataframe_not_none(self, ohlcv_df: pd.DataFrame) -> None:
+        """Return value must be a DataFrame (not None or in-place only).
+
+        ENRICHMENT_REGISTRY['technicals'] relies on this via the lambda in
+        feature_profiles.py. A None return would silently drop all technical
+        columns in build_dataset.
+        """
+        result = compute_all_technicals(ohlcv_df)
+        assert result is not None, (
+            "compute_all_technicals() returned None — "
+            "ENRICHMENT_REGISTRY['technicals'] expects a DataFrame"
+        )
+        assert isinstance(result, pd.DataFrame), (
+            f"compute_all_technicals() must return a pd.DataFrame, got {type(result).__name__}"
+        )
+        assert len(result) == len(ohlcv_df), (
+            f"Row count changed: {len(ohlcv_df)} → {len(result)}"
+        )
+
 
 class TestComputeMomentumEdgeCases:
     def test_with_insufficient_data(self) -> None:

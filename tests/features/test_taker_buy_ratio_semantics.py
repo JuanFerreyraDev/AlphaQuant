@@ -30,7 +30,7 @@ standard as the trend_htf / funding_rate leakage tests:
      has nonzero volume, and (c) the distribution is roughly centered
      near 0.5 (rough reality check for BTC perpetual futures).
 
-Run: python3 tools/diagnostics/test_taker_buy_ratio_semantics.py
+Run: python3 tests/features/test_taker_buy_ratio_semantics.py
 """
 
 from __future__ import annotations

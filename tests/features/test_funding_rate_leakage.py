@@ -6,7 +6,7 @@ applied / becomes known.  Verifies that every sub-daily bar inherits the
 funding rate from the MOST RECENT SETTLEMENT that happened AT OR BEFORE
 the bar's open timestamp — never the still-upcoming funding settlement.
 
-Run: python3 tools/diagnostics/test_funding_rate_leakage.py
+Run: python3 tests/features/test_funding_rate_leakage.py
 """
 
 import sys

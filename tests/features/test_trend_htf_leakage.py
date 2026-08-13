@@ -4,7 +4,7 @@ Verifies that every sub-daily bar inherits the trend_htf value from the
 MOST RECENT FULLY CLOSED daily bar — never the daily bar that is still
 in progress on the same calendar day.
 
-Run: python3 tools/diagnostics/test_trend_htf_leakage.py
+Run: python3 tests/features/test_trend_htf_leakage.py
 """
 
 import sys
