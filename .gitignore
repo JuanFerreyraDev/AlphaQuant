@@ -49,3 +49,7 @@ data/bot_state.json
 # Plots
 data/plots/*
 !data/plots/.gitkeep
+
+# Reports
+reports/*
+!reports/.gitkeep

@@ -10,7 +10,7 @@ config, on val and test separately. Also trains the actual winning-config
 model to compare its signals against the naive baseline and against
 ema_50 trend.
 
-Run:  python3 tools/diagnostics/diagnose_naive_baseline.py
+Run:  python3 tools/diagnostics/diagnose_naive_baseline.py --symbol BTC_USDT
 """
 
 import sys
@@ -18,8 +18,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import argparse
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.brain.data_fetcher import get_fear_and_greed
 from src.brain.features import add_sentiment, compute_all_technicals
@@ -35,7 +36,6 @@ from src.utils.helpers import (
     load_csv_data,
 )
 
-SYMBOL = "BTC_USDT"
 TIMEFRAME = "4h"
 SWING = 10
 TP = 1.5
@@ -108,10 +108,15 @@ def simulate_model(model, X: pd.DataFrame, prices: pd.DataFrame,
 
 
 def main() -> None:
-    print(f"=== Naive long-only baseline vs model: {SYMBOL} / {TIMEFRAME} ===")
+    parser = argparse.ArgumentParser(description="Naive long-only baseline vs trained model")
+    parser.add_argument("--symbol", type=str, default="BTC_USDT", help="Trading pair (default: BTC_USDT)")
+    args = parser.parse_args()
+    symbol = args.symbol.replace("/", "_").replace(":", "_").split("_USDT")[0] + "_USDT"
+
+    print(f"=== Naive long-only baseline vs model: {symbol} / {TIMEFRAME} ===")
     print(f"Config: swing={SWING}, tp={TP}xATR, sl={SL}xATR, cost={COST_PER_TRADE}\n")
 
-    df = load_csv_data(SYMBOL, TIMEFRAME)
+    df = load_csv_data(symbol, TIMEFRAME)
     compute_all_technicals(df)
     df_fg = get_fear_and_greed()
     df, has_sentiment = add_sentiment(df, df_fg)

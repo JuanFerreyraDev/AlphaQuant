@@ -13,11 +13,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import argparse
 import numpy as np
 import pandas as pd
 import xgboost as xgb
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.brain.data_fetcher import get_fear_and_greed
 from src.brain.features import add_sentiment, compute_all_technicals
@@ -33,7 +34,6 @@ from src.utils.helpers import (
     load_csv_data,
 )
 
-SYMBOL = "BTC_USDT"
 SWING = 10
 TP = 1.5
 SL = 1.0
@@ -223,12 +223,12 @@ def pick_threshold_old(model, X_val, y_val, prices_val):
     return best_thr
 
 
-def run_timeframe(timeframe: str) -> None:
+def run_timeframe(symbol: str, timeframe: str) -> None:
     print("=" * 78)
-    print(f"TIMEFRAME {timeframe}  swing={SWING} tp={TP} sl={SL} cost={COST}")
+    print(f"SYMBOL {symbol} | TIMEFRAME {timeframe}  swing={SWING} tp={TP} sl={SL} cost={COST}")
     print("=" * 78)
 
-    df_raw = load_csv_data(SYMBOL, timeframe)
+    df_raw = load_csv_data(symbol, timeframe)
     compute_all_technicals(df_raw)
     df_fg = get_fear_and_greed()
     df_raw, _ = add_sentiment(df_raw, df_fg)
@@ -374,12 +374,17 @@ def run_timeframe(timeframe: str) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Reconcile naive PF")
+    parser.add_argument("--symbol", type=str, default="BTC_USDT", help="Trading pair (default: BTC_USDT)")
+    args = parser.parse_args()
+    symbol = args.symbol.replace("/", "_").replace(":", "_").split("_USDT")[0] + "_USDT"
+
     print("=== Reconcile naive PF: target/sim OLD vs NEW ===\n")
     print("NOTE: diagnose_naive_baseline.py is untracked (no git history).")
     print("Diff beyond calibration: the *helpers* payoff path changed underneath")
     print("(_simulate_fitness_sequential now treats y==0 as timeout market-close).\n")
     for tf in ("4h", "1h"):
-        run_timeframe(tf)
+        run_timeframe(symbol, tf)
 
 
 if __name__ == "__main__":

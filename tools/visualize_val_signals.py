@@ -73,19 +73,18 @@ def _load_bundle(model_dir: Path, safe_symbol: str) -> dict[str, Any]:
     return joblib.load(bundle_path)
 
 
-def _prepare_dataframe(safe_symbol: str) -> pd.DataFrame:
+def _prepare_dataframe(safe_symbol: str, timeframe: str) -> pd.DataFrame:
     """Load raw OHLCV CSV, compute all technical indicators, and attach sentiment.
 
     Does NOT call cleanup_columns — OHLCV columns are required for the chart.
     Attempts a live fetch of the Fear & Greed index; falls back to an empty
     DataFrame (technical-only mode) if the request fails.
     """
-    filename = f"{safe_symbol}_1d.csv"
     try:
-        df = load_csv_data(filename)
+        df = load_csv_data(safe_symbol, timeframe)
     except FileNotFoundError:
         raise SystemExit(
-            f"[ERROR] Historical CSV not found: data/raw_csv/{filename}\n"
+            f"[ERROR] Historical CSV not found for {safe_symbol} {timeframe}\n"
             "Run the data fetcher to download price data first."
         )
     compute_all_technicals(df)
@@ -314,7 +313,8 @@ def main() -> None:
     bundle = _load_bundle(model_dir, safe_symbol)
 
     print("\nPreparing data…")
-    df = _prepare_dataframe(safe_symbol)
+    timeframe = config.get("timeframe", "1d")
+    df = _prepare_dataframe(safe_symbol, timeframe)
 
     print("Running OOS inference…")
     df_val, signal_mask = _generate_signals(df, bundle)

@@ -8,7 +8,7 @@ a naive baseline using paired block bootstrapping.
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 import numpy as np
@@ -53,6 +53,9 @@ class WalkForwardResult:
     pooled_delta_bootstrap: tuple[float, float]
     pooled_trade_count: int
     passes_gate: bool
+    model_times_all: list[np.ndarray] = field(default_factory=list)
+    model_rets_all: list[np.ndarray] = field(default_factory=list)
+    window_boundaries: list[tuple[pd.Timestamp, pd.Timestamp]] = field(default_factory=list)
 
 
 def _profit_factor(rets: np.ndarray) -> float:
@@ -123,7 +126,10 @@ def _simulate_trades_with_time(
         else:
             i += 1
 
-    return np.array(trade_times), np.array(rets, dtype=np.float64)
+    return (
+        np.array(trade_times, dtype="datetime64[ns]"),
+        np.array(rets, dtype=np.float64),
+    )
 
 
 def _find_optimal_threshold(
@@ -231,6 +237,52 @@ def _bootstrap_paired_blocks(
         deltas[b] = _profit_factor(b_model) - _profit_factor(b_naive)
 
     return float(np.percentile(deltas, 5)), float(np.percentile(deltas, 95))
+
+
+def bootstrap_absolute_pf(
+    model_times: list[np.ndarray],
+    model_rets: list[np.ndarray],
+    window_boundaries: list[tuple[pd.Timestamp, pd.Timestamp]],
+    n_blocks: int = 8,
+    n_bootstrap: int = 1000,
+    random_state: int = 42,
+) -> tuple[float, float]:
+    """Block bootstrap on OOS model trades → distribution of pooled Profit Factor.
+
+    Args:
+        model_times: Per-window trade timestamp arrays.
+        model_rets: Per-window trade return arrays.
+        window_boundaries: OOS window (start, end) pairs aligned with trade lists.
+        n_blocks: Contiguous blocks per OOS window.
+        n_bootstrap: Bootstrap resample count.
+        random_state: RNG seed.
+
+    Returns:
+        Tuple of (5th_percentile_pf, 95th_percentile_pf).
+    """
+    rng = np.random.default_rng(random_state)
+    all_blocks: list[np.ndarray] = []
+
+    for w_idx, (w_start, w_end) in enumerate(window_boundaries):
+        block_edges = pd.date_range(start=w_start, end=w_end, periods=n_blocks + 1).values
+        m_t = model_times[w_idx]
+        m_r = model_rets[w_idx]
+        for i in range(n_blocks):
+            mask = (m_t >= block_edges[i]) & (m_t < block_edges[i + 1])
+            all_blocks.append(m_r[mask])
+
+    n_total_blocks = len(all_blocks)
+    if n_total_blocks == 0:
+        return float("nan"), float("nan")
+
+    pf_dist = np.empty(n_bootstrap, dtype=np.float64)
+    for b in range(n_bootstrap):
+        idx = rng.choice(n_total_blocks, size=n_total_blocks, replace=True)
+        chunks = [all_blocks[i] for i in idx if len(all_blocks[i]) > 0]
+        selected = np.concatenate(chunks) if chunks else np.array([])
+        pf_dist[b] = _profit_factor(selected)
+
+    return float(np.percentile(pf_dist, 5)), float(np.percentile(pf_dist, 95))
 
 
 def run_walk_forward(
@@ -447,4 +499,7 @@ def run_walk_forward(
         pooled_delta_bootstrap=(p5, p95),
         pooled_trade_count=pooled_trade_count,
         passes_gate=passes,
+        model_times_all=model_t_all,
+        model_rets_all=model_r_all,
+        window_boundaries=boundaries,
     )

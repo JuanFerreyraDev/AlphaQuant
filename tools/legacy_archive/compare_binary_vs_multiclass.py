@@ -38,11 +38,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import argparse
 import numpy as np
 import pandas as pd
 import xgboost as xgb
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.brain.features import compute_all_technicals
 from src.utils.data_splits import (
@@ -52,7 +53,6 @@ from src.utils.data_splits import (
 )
 from src.utils.helpers import cleanup_columns, compute_target, load_csv_data
 
-SYMBOL = "BTC_USDT"
 SWING = 10
 TP = 1.5
 SL = 1.0
@@ -276,8 +276,8 @@ def score_window(proba_tp, y, prices, threshold):
     }
 
 
-def prepare_frame(timeframe: str, hours: float):
-    df = load_csv_data(SYMBOL, timeframe)
+def prepare_frame(symbol: str, timeframe: str, hours: float):
+    df = load_csv_data(symbol, timeframe)
     compute_all_technicals(df)
     # Skip FNG — Volatility Hunter features do not use sentiment.
     compute_target(
@@ -433,6 +433,11 @@ def fmt_row(formulation, split, r, thr, bal_short):
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Compare binary vs multiclass formulations")
+    parser.add_argument("--symbol", type=str, default="BTC_USDT", help="Trading pair (default: BTC_USDT)")
+    args = parser.parse_args()
+    symbol = args.symbol.replace("/", "_").replace(":", "_").split("_USDT")[0] + "_USDT"
+
     print("=" * 88)
     print("CLARIFICATION (prior table)")
     print("=" * 88)
@@ -454,9 +459,9 @@ def main() -> None:
 
     for tf, hours in TIMEFRAMES.items():
         print("=" * 88)
-        print(f"TIMEFRAME {tf}  swing={SWING} tp={TP} sl={SL} cost={COST}")
+        print(f"SYMBOL {symbol} | TIMEFRAME {tf}  swing={SWING} tp={TP} sl={SL} cost={COST}")
         print("=" * 88)
-        parts = prepare_frame(tf, hours)
+        parts = prepare_frame(symbol, tf, hours)
         print(f"split train/val/test = {parts['split']}")
         print(
             f"val  [{parts['val'].index[0]} .. {parts['val'].index[-1]}]  "

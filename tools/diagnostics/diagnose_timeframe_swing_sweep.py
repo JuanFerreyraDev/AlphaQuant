@@ -9,7 +9,10 @@ Also reports the ATR-as-%-of-price distribution on 1h to sanity-check
 whether the tp=1.5/sl=1.0 ratio still makes economic sense at this
 timeframe (vs the round-trip cost of 0.3%).
 
-Run:  python3 tools/diagnostics/diagnose_timeframe_swing_sweep.py
+Run:  
+
+python3 tools/diagnostics/diagnose_timeframe_swing_sweep.py --symbol BTC_USDT --timeframe 1h
+
 """
 
 import argparse
@@ -22,7 +25,7 @@ import pandas as pd
 
 from src.utils.timeframe_utils import parse_timeframe_hours
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import xgboost as xgb
 
@@ -41,7 +44,6 @@ from src.utils.helpers import (
     load_csv_data,
 )
 
-SYMBOL = "BTC_USDT"
 TP = 1.5
 SL = 1.0
 COST = 0.0
@@ -82,14 +84,16 @@ def train_model(df_train, df_val, prices_val, swing):
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--timeframe", default="4h")
+    parser.add_argument("--symbol", type=str, default="BTC_USDT", help="Trading pair (default: BTC_USDT)")
+    parser.add_argument("--timeframe", default="1h")
     args = parser.parse_args()
+    symbol = args.symbol.replace("/", "_").replace(":", "_").split("_USDT")[0] + "_USDT"
     timeframe = args.timeframe
-    print(f"=== swing sweep {SWINGS} — {SYMBOL}/{timeframe} ===")
+    print(f"=== swing sweep {SWINGS} — {symbol}/{timeframe} ===")
     print(f"Config: tp={TP}xATR sl={SL}xATR cost={COST} features={FEATURES}\n")
 
     # ATR-as-%-of-price sanity check for the TP/SL ratio at timeframe.
-    df_raw = load_csv_data(SYMBOL, timeframe)
+    df_raw = load_csv_data(symbol, timeframe)
     compute_all_technicals(df_raw)
     atr_pct = (df_raw["atr_14"] / df_raw["close"]).dropna()
     median_atr_pct = atr_pct.median()
