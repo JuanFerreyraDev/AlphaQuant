@@ -9,7 +9,7 @@ additional ~1-year historical windows outside the production split
 (bear, range, bull regimes) to check whether the model's edge over naive
 is consistent across regimes or specific to the current val/test partition.
 
-Run:  python3 tools/diagnostics/diagnose_swing_and_regimes.py
+Run:  python3 tools/diagnostics/diagnose_swing_and_regimes.py --symbol BTC_USDT
 """
 
 import sys
@@ -17,8 +17,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import argparse
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import xgboost as xgb
 
@@ -37,7 +38,6 @@ from src.utils.helpers import (
     load_csv_data,
 )
 
-SYMBOL = "BTC_USDT"
 TIMEFRAME = "4h"
 TP = 1.5
 SL = 1.0
@@ -95,9 +95,9 @@ def train_model(df_train: pd.DataFrame, df_val: pd.DataFrame,
     return model, best_threshold
 
 
-def prepare_data(swing: int):
+def prepare_data(symbol: str, swing: int):
     """Load CSV, compute features+target for a given swing, split."""
-    df = load_csv_data(SYMBOL, TIMEFRAME)
+    df = load_csv_data(symbol, TIMEFRAME)
     compute_all_technicals(df)
     df_fg = get_fear_and_greed()
     df, _ = add_sentiment(df, df_fg)
@@ -131,7 +131,12 @@ def regime_stats(close: pd.Series) -> tuple[float, float]:
 
 
 def main() -> None:
-    print(f"=== Part A: swing sweep ({SWINGS}) on production val/test split ===")
+    parser = argparse.ArgumentParser(description="Diagnostic: swing sweep + cross-regime consistency")
+    parser.add_argument("--symbol", type=str, default="BTC_USDT", help="Trading pair (default: BTC_USDT)")
+    args = parser.parse_args()
+    symbol = args.symbol.replace("/", "_").replace(":", "_").split("_USDT")[0] + "_USDT"
+
+    print(f"=== Part A: swing sweep ({SWINGS}) on production val/test split for {symbol} ===")
     print(f"Config: tp={TP}xATR sl={SL}xATR cost={COST} features={FEATURES}\n")
 
     header = (f"{'swing':>5} | {'val_pf':>7} {'naive':>7} {'delta':>7} "
@@ -141,7 +146,7 @@ def main() -> None:
 
     results_a = {}
     for swing in SWINGS:
-        df_model, prices, train_sl, val_sl, test_sl = prepare_data(swing)
+        df_model, prices, train_sl, val_sl, test_sl = prepare_data(symbol, swing)
         df_train = df_model.iloc[train_sl]
         df_val = df_model.iloc[val_sl]
         df_test = df_model.iloc[test_sl]
@@ -204,7 +209,7 @@ def main() -> None:
         "bull_2024": ("2024-01-01", "2024-12-31"),
     }
 
-    df_model, prices, _, _, _ = prepare_data(best_swing)
+    df_model, prices, _, _, _ = prepare_data(symbol, best_swing)
 
     header_b = (f"{'window':>12} | {'cum_ret':>8} {'vol':>6} | "
                 f"{'model_pf':>8} {'naive_pf':>8} {'delta':>7} | "

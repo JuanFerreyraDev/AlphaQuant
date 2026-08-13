@@ -1,4 +1,4 @@
-"""Standalone Level-1 diagnostic for BTC_USDT / timeframe.
+"""Standalone Level-1 diagnostic for any symbol / timeframe.
 
 Loads the timeframe CSV, runs compute_all_technicals + add_sentiment +
 compute_target ONCE (swing=10, tp=1.5, sl=1.0), and reports:
@@ -13,7 +13,8 @@ compute_target ONCE (swing=10, tp=1.5, sl=1.0), and reports:
   e) Per-feature point-biserial correlation with target on the train
      split (cheap signal proxy, no model training).
 
-Run:  python3 tools/diagnostics/diagnose_timeframe_data.py
+Run:  python3 tools/diagnostics/diagnose_timeframe_data.py --symbol BTC_USDT
+     python3 tools/diagnostics/diagnose_timeframe_data.py --symbol SOL_USDT --timeframe 1h
 """
 
 import sys
@@ -24,7 +25,7 @@ import numpy as np
 import pandas as pd
 
 # Make src/ importable when run as a script from the repo root.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.brain.data_fetcher import get_fear_and_greed
 from src.brain.features import add_sentiment, compute_all_technicals
@@ -36,7 +37,6 @@ from src.utils.data_splits import (
 from src.utils.helpers import compute_target, load_csv_data
 from src.utils.timeframe_utils import parse_timeframe_hours
 
-SYMBOL = "BTC_USDT"
 TP = 1.0
 SL = 2.0
 
@@ -53,13 +53,17 @@ FEATURE_COLS = [
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--symbol", type=str, default="BTC_USDT",
+                        help="Trading pair (default: BTC_USDT)")
     parser.add_argument("--timeframe", default="4h")
     parser.add_argument("--swing", type=int, default=10)
     args = parser.parse_args()
+    SYMBOL = args.symbol.replace("/", "_").replace(":", "_").split("_USDT")[0] + "_USDT"
     timeframe = args.timeframe
     swing = args.swing
 
-    print(f"=== Level-1 diagnostic: {SYMBOL} / {timeframe} ===\n")
+    print(f"=== Level-1 diagnostic: {SYMBOL} / {timeframe} ===")
+    print()
 
     df = load_csv_data(SYMBOL, timeframe)
     print(f"Loaded {len(df)} bars from CSV "

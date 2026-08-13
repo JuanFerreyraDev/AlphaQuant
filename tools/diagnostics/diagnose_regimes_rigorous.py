@@ -13,7 +13,7 @@ Corrects the methodological issues in the previous Part B:
     interval of the model-vs-naive delta, to tell whether the observed
     delta is distinguishable from zero given the sample size.
 
-Run:  python3 tools/diagnostics/diagnose_regimes_rigorous.py
+Run:  python3 tools/diagnostics/diagnose_regimes_rigorous.py --symbol BTC_USDT
 """
 
 import sys
@@ -21,8 +21,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import argparse
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import xgboost as xgb
 
@@ -35,7 +36,6 @@ from src.utils.helpers import (
     load_csv_data,
 )
 
-SYMBOL = "BTC_USDT"
 TIMEFRAME = "4h"
 SWING = 10
 TP = 1.5
@@ -126,11 +126,16 @@ def train_model(df_train, df_val, prices_val, swing):
 
 
 def main() -> None:
-    print(f"=== Cross-regime consistency (rigorous) — {SYMBOL}/{TIMEFRAME} "
+    parser = argparse.ArgumentParser(description="Cross-regime consistency (rigorous)")
+    parser.add_argument("--symbol", type=str, default="BTC_USDT", help="Trading pair (default: BTC_USDT)")
+    args = parser.parse_args()
+    symbol = args.symbol.replace("/", "_").replace(":", "_").split("_USDT")[0] + "_USDT"
+
+    print(f"=== Cross-regime consistency (rigorous) — {symbol}/{TIMEFRAME} "
           f"swing={SWING} tp={TP} sl={SL} cost={COST} ===")
     print(f"Production train range ends: {PROD_TRAIN_END.date()}\n")
 
-    df = load_csv_data(SYMBOL, TIMEFRAME)
+    df = load_csv_data(symbol, TIMEFRAME)
     compute_all_technicals(df)
     df_fg = get_fear_and_greed()
     df, _ = add_sentiment(df, df_fg)
