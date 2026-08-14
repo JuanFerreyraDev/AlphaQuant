@@ -57,6 +57,7 @@ def _run_walk_forward(
     train_fn,
     threshold_grid: tuple[float, float, float],
     config: ExperimentConfig,
+    target_col: str = "target",
 ) -> WalkForwardResult:
     return run_walk_forward(
         df_raw=df,
@@ -65,6 +66,7 @@ def _run_walk_forward(
         train_predict_fn=train_fn,
         features=features,
         threshold_grid=threshold_grid,
+        target_col=target_col,
         **config.walk_forward_kwargs(),
     )
 
@@ -178,13 +180,15 @@ def run_baseline(
 
     for tf in tfs:
         df, feats = master[tf]
-        for form_name, train_fn, grid in FORMULATIONS:
+        for form_name, train_fn, grid, target_col in FORMULATIONS:
             run_n += 1
             tag = f"[{run_n}/{total_runs}] {tf} × {form_name}"
             print(f"\n{'─' * 90}\n{tag}\n{'─' * 90}")
 
             t_start = time.time()
-            result = _run_walk_forward(df, feats, safe, tf, train_fn, grid, cfg)
+            result = _run_walk_forward(
+                df, feats, safe, tf, train_fn, grid, cfg, target_col=target_col,
+            )
             row = _baseline_row(safe, tf, form_name, result, cfg)
             rows.append(row)
 
@@ -279,7 +283,7 @@ def run_ab_test(
         df, control_feats = master[tf]
         treatment_feats = control_feats + [prof.treatment_col]
 
-        for form_name, train_fn, grid in FORMULATIONS:
+        for form_name, train_fn, grid, target_col in FORMULATIONS:
             for variant, features in [
                 ("CONTROL", control_feats),
                 ("TREATMENT", treatment_feats),
@@ -289,7 +293,9 @@ def run_ab_test(
                 print(f"\n{'─' * 90}\n{tag}\n{'─' * 90}")
 
                 t_start = time.time()
-                result = _run_walk_forward(df, features, safe, tf, train_fn, grid, cfg)
+                result = _run_walk_forward(
+                    df, features, safe, tf, train_fn, grid, cfg, target_col=target_col,
+                )
                 row = _ab_test_row(
                     safe, tf, form_name, variant, prof.name, result,
                 )
