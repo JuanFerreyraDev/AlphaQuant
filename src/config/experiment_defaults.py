@@ -7,8 +7,10 @@ from dataclasses import dataclass
 from src.utils.helpers import (
     BINARY_HOMERUN_THRESHOLD_GRID,
     MULTICLASS_3_THRESHOLD_GRID,
+    REGRESSION_RETURN_THRESHOLD_GRID,
     train_predict_binary_homerun,
     train_predict_multiclass_3,
+    train_predict_regression_return,
 )
 
 # Pre-registered baseline screening gate: pooled ΔPF p5 > 0.0 (model vs naive_long)
@@ -16,9 +18,15 @@ MIN_BASELINE_DELTA_P5: float = 0.0
 
 DEFAULT_TIMEFRAMES: tuple[str, ...] = ("4h", "1h")
 
-FORMULATIONS: tuple[tuple[str, object, tuple[float, float, float]], ...] = (
-    ("binary_homerun", train_predict_binary_homerun, BINARY_HOMERUN_THRESHOLD_GRID),
-    ("multiclass_3", train_predict_multiclass_3, MULTICLASS_3_THRESHOLD_GRID),
+FORMULATIONS: tuple[tuple[str, object, tuple[float, float, float], str], ...] = (
+    ("binary_homerun", train_predict_binary_homerun, BINARY_HOMERUN_THRESHOLD_GRID, "target"),
+    ("multiclass_3", train_predict_multiclass_3, MULTICLASS_3_THRESHOLD_GRID, "target"),
+    (
+        "regression_return",
+        train_predict_regression_return,
+        REGRESSION_RETURN_THRESHOLD_GRID,
+        "target_ret",
+    ),
 )
 
 

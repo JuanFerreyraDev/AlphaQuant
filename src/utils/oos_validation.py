@@ -27,6 +27,8 @@ MIN_BOOTSTRAP_P5: float = 0.0
 MIN_POOLED_TRADES: int = 300
 """Statistical floor for total OOS trades across all windows to ensure power."""
 
+# Sentinel value used by _find_optimal_threshold to indicate no valid threshold
+THRESHOLD_NOT_FOUND: float = -1.0
 
 @dataclass
 class WindowResult:
@@ -306,6 +308,7 @@ def run_walk_forward(
     n_bootstrap: int = 1000,
     n_blocks: int = 8,
     random_state: int = 42,
+    target_col: str = "target",
 ) -> WalkForwardResult:
     """Execute expanding-window walk-forward validation with paired block bootstrap.
 
@@ -333,12 +336,21 @@ def run_walk_forward(
         n_bootstrap: Number of bootstrap resamples.
         n_blocks: Number of time blocks per OOS window for paired bootstrap.
         random_state: Random seed for statistical reproducibility.
+        target_col: Name of the target column to extract for train/val labels.
+            Defaults to ``"target"`` (ternary classification) for backward
+            compatibility. Pass ``"target_ret"`` for continuous-return regression.
 
     Returns:
         WalkForwardResult containing window metrics and global bootstrap pass/fail gate.
     """
     if embargo_days is None:
         embargo_days = swing_period
+
+    if target_col not in df_raw.columns:
+        raise ValueError(
+            f"target_col={target_col!r} not in df_raw columns. "
+            f"Available: {list(df_raw.columns)}"
+        )
 
     cal = get_calibrated_constants(timeframe)
     stat_floor_val_trades = cal["stat_floor_val_trades"]
@@ -400,9 +412,9 @@ def run_walk_forward(
 
         model, proba_val, predict_fn = train_predict_fn(
             df_prior_train[features],
-            df_prior_train["target"],
+            df_prior_train[target_col],
             df_prior_val[features],
-            df_prior_val["target"],
+            df_prior_val[target_col],
             random_state=random_state,
         )
 
@@ -418,7 +430,7 @@ def run_walk_forward(
             min_val_trades=stat_floor_val_trades,
         )
 
-        if thr < 0:
+        if thr == THRESHOLD_NOT_FOUND:  # Only reject the sentinel value, not negative thresholds
             windows_results.append(
                 WindowResult(
                     start=current_start,

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from src.utils.oos_validation import THRESHOLD_NOT_FOUND
 
 import argparse
 import numpy as np
@@ -339,7 +340,7 @@ def run_production_split(parts, formulation: str):
             "max": float(proba_va.max()),
         },
     }
-    if thr < 0:
+    if thr == THRESHOLD_NOT_FOUND:
         results["val"] = None
         results["test"] = None
         return results, model
@@ -391,7 +392,7 @@ def run_oos_bootstrap(parts, formulation: str, timeframe: str):
         thr = threshold_search(
             proba_val, df_prior_val["target"], p_prior_val, formulation=formulation
         )
-        if thr < 0:
+        if thr == THRESHOLD_NOT_FOUND:
             rows.append({"window": name, "status": "threshold_failed", "balance": bal})
             continue
 

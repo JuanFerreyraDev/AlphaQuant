@@ -54,7 +54,7 @@ def build_dataset(
     df.drop(columns=[c for c in COLS_TO_DROP if c in df.columns], inplace=True)
     df.dropna(inplace=True)
 
-    exclude = {"close", "target"}
+    exclude = {"close", "target", "target_ret"}
     if prof.treatment_col:
         exclude.add(prof.treatment_col)
 

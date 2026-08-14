@@ -34,8 +34,13 @@ def _resolve_targets_numba(
     ltf_highs: np.ndarray,
     ltf_lows: np.ndarray,
     ns_1_day: int,
-    ns_swing: int
-) -> np.ndarray:
+    ns_swing: int,
+    atr: np.ndarray,
+    close: np.ndarray,
+    tp_multi: float,
+    sl_multi: float,
+    swing_days: int,
+) -> tuple[np.ndarray, np.ndarray]:
     """Numba JIT core: Linear scan (Two-Pointer) inside the window.
 
     Args:
@@ -47,37 +52,50 @@ def _resolve_targets_numba(
         ltf_lows: Lower timeframe lows array.
         ns_1_day: Number of seconds in 1 day.
         ns_swing: Number of seconds in the swing period.
+        atr: ATR values array (same timeframe as daily_times).
+        close: Close prices array (same timeframe as daily_times).
+        tp_multi: ATR multiplier for Take Profit.
+        sl_multi: ATR multiplier for Stop Loss.
+        swing_days: Number of future bars (same timeframe) for timeout exit.
 
     Returns:
-        Array of targets.
+        Tuple of (targets, target_rets) — ternary labels and continuous returns.
     """
     n_daily = len(daily_times)
     n_ltf = len(ltf_times)
     targets = np.zeros(n_daily, dtype=np.int32)
-    
+    target_rets = np.zeros(n_daily, dtype=np.float64)
+
     ltf_idx = 0
-    
+
     for i in range(n_daily):
         window_start = daily_times[i] + ns_1_day
         window_end = daily_times[i] + ns_swing
-        
+
         while ltf_idx < n_ltf and ltf_times[ltf_idx] < window_start:
             ltf_idx += 1
-        
+
         j = ltf_idx
-        label = 0  # "Timeout"
+        label = 0
         while j < n_ltf and ltf_times[j] <= window_end:
             if ltf_lows[j] <= sl_prices[i]:
-                label = -1  # Stop Loss
+                label = -1
                 break
             if ltf_highs[j] >= tp_prices[i]:
-                label = 1   # 1 Take Profit
+                label = 1
                 break
             j += 1
-            
+
         targets[i] = label
-        
-    return targets
+        if label == 1:
+            target_rets[i] = (atr[i] * tp_multi) / close[i]
+        elif label == -1:
+            target_rets[i] = -(atr[i] * sl_multi) / close[i]
+        else:
+            exit_idx = min(i + swing_days, n_daily - 1)
+            target_rets[i] = (close[exit_idx] - close[i]) / close[i]
+
+    return targets, target_rets
 
 
 @njit
@@ -86,9 +104,13 @@ def _resolve_targets_same_tf(
     sl_prices: np.ndarray,
     highs: np.ndarray,
     lows: np.ndarray,
+    atr: np.ndarray,
+    close: np.ndarray,
+    tp_multi: float,
+    sl_multi: float,
     swing_days: int,
     n: int,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     """Numba JIT core for same-timeframe target resolution.
 
     Scans future bars chronologically (bar-by-bar) for each signal bar i up to
@@ -108,13 +130,18 @@ def _resolve_targets_same_tf(
         sl_prices: Array of Stop Loss price targets.
         highs: Array of High prices.
         lows: Array of Low prices.
+        atr: ATR values array.
+        close: Close prices array.
+        tp_multi: ATR multiplier for Take Profit.
+        sl_multi: ATR multiplier for Stop Loss.
         swing_days: Number of future bars to scan.
         n: Total number of bars (len of array).
 
     Returns:
-        Array of targets (int32).
+        Tuple of (targets, target_rets) — ternary labels and continuous returns.
     """
     targets = np.zeros(n, dtype=np.int32)
+    target_rets = np.zeros(n, dtype=np.float64)
     for i in range(n):
         label = 0
         max_j = min(i + swing_days + 1, n)
@@ -126,7 +153,14 @@ def _resolve_targets_same_tf(
                 label = 1
                 break
         targets[i] = label
-    return targets
+        if label == 1:
+            target_rets[i] = (atr[i] * tp_multi) / close[i]
+        elif label == -1:
+            target_rets[i] = -(atr[i] * sl_multi) / close[i]
+        else:
+            exit_idx = min(i + swing_days, n - 1)
+            target_rets[i] = (close[exit_idx] - close[i]) / close[i]
+    return targets, target_rets
 
 
 @njit
@@ -449,6 +483,9 @@ def compute_target(
 
     tp_price: pd.Series = df["close"] + (df["atr_14"] * atr_tp_multi)
     sl_price: pd.Series = df["close"] - (df["atr_14"] * atr_sl_multi)
+    atr_arr: np.ndarray = df["atr_14"].values
+    close_arr: np.ndarray = df["close"].values
+    swing_days_int = int(swing_days)
 
     if lower_tf_df is not None:
         # --- Multi-timeframe path (Numba Optimized) -------------------------
@@ -473,7 +510,7 @@ def compute_target(
         ns_1_bar = int(pd.Timedelta(hours=timeframe_hours).value)
         ns_swing = int(pd.Timedelta(hours=timeframe_hours * swing_days).value)
 
-        targets = _resolve_targets_numba(
+        targets, target_rets = _resolve_targets_numba(
             daily_times=daily_times,
             tp_prices=tp_prices_arr,
             sl_prices=sl_prices_arr,
@@ -481,10 +518,16 @@ def compute_target(
             ltf_highs=ltf_highs,
             ltf_lows=ltf_lows,
             ns_1_day=ns_1_bar,
-            ns_swing=ns_swing
+            ns_swing=ns_swing,
+            atr=atr_arr,
+            close=close_arr,
+            tp_multi=float(atr_tp_multi),
+            sl_multi=float(atr_sl_multi),
+            swing_days=swing_days_int,
         )
         
         df["target"] = targets
+        df["target_ret"] = target_rets
 
     else:
         # --- Same-Timeframe Fallback (Numba Bar-by-Bar Chronological) -------
@@ -494,16 +537,21 @@ def compute_target(
         lows_arr = df["low"].values
         n = len(df)
 
-        targets = _resolve_targets_same_tf(
+        targets, target_rets = _resolve_targets_same_tf(
             tp_prices=tp_prices_arr,
             sl_prices=sl_prices_arr,
             highs=highs_arr,
             lows=lows_arr,
-            swing_days=int(swing_days),
+            atr=atr_arr,
+            close=close_arr,
+            tp_multi=float(atr_tp_multi),
+            sl_multi=float(atr_sl_multi),
+            swing_days=swing_days_int,
             n=n,
         )
 
         df["target"] = targets
+        df["target_ret"] = target_rets
 
     return df
 
@@ -979,3 +1027,65 @@ def train_predict_multiclass_3(
 
 
 train_predict_multiclass_3.threshold_grid = MULTICLASS_3_THRESHOLD_GRID  # type: ignore[attr-defined]
+
+
+REGRESSION_RETURN_THRESHOLD_GRID: tuple[float, float, float] = (-0.0035, 0.0070, 0.0003)
+
+
+def train_predict_regression_return(
+    X_train: pd.DataFrame,
+    y_train_raw: pd.Series,
+    X_val: pd.DataFrame,
+    y_val_raw: pd.Series,
+    **kwargs: Any,
+) -> tuple[Any, np.ndarray, Callable[[Any, pd.DataFrame], np.ndarray]]:
+    """Train an XGBoost regression model to predict continuous trade returns.
+
+    This formulation replaces the ternary classification (SL/Timeout/TP)
+    with a regression that directly predicts the continuous realized return
+    ``target_ret = (exit_price - entry_price) / entry_price``.  It preserves
+    gradient information from the timeout bucket (13–15% of trades) where
+    the economic outcome is continuous but was previously collapsed into a
+    single class.
+
+    The prediction function returns the raw predicted return directly
+    (no sigmoid / softmax) so the threshold grid should be expressed in
+    return units (e.g. 0.0 = cost-neutral, 0.005 = +50 bps net of cost).
+
+    Args:
+        X_train: Training features DataFrame.
+        y_train_raw: Training continuous-return targets (target_ret column).
+        X_val: Validation features DataFrame.
+        y_val_raw: Validation continuous-return targets (target_ret column).
+        **kwargs: Additional keyword arguments (e.g., random_state).
+
+    Returns:
+        A tuple containing:
+            - The fitted XGBRegressor.
+            - An array of validation predictions (predicted returns, raw values).
+            - A prediction closure to be used for OOS inference.
+    """
+    y_tr = y_train_raw.astype(np.float64).values
+    y_va = y_val_raw.astype(np.float64).values
+
+    model = xgb.XGBRegressor(
+        n_estimators=100,
+        max_depth=3,
+        learning_rate=0.05,
+        objective="reg:pseudohubererror",
+        early_stopping_rounds=10,
+        eval_metric="mphe",
+        tree_method="hist",
+        random_state=kwargs.get("random_state", 42),
+        n_jobs=-1,
+    )
+
+    model.fit(X_train, y_tr, eval_set=[(X_val, y_va)], verbose=False)
+
+    def predict_fn(mod, X: pd.DataFrame) -> np.ndarray:
+        return mod.predict(X).astype(np.float64)
+
+    return model, predict_fn(model, X_val), predict_fn
+
+
+train_predict_regression_return.threshold_grid = REGRESSION_RETURN_THRESHOLD_GRID  # type: ignore[attr-defined]
