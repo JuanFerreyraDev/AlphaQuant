@@ -241,52 +241,6 @@ def _bootstrap_paired_blocks(
     return float(np.percentile(deltas, 5)), float(np.percentile(deltas, 95))
 
 
-def bootstrap_absolute_pf(
-    model_times: list[np.ndarray],
-    model_rets: list[np.ndarray],
-    window_boundaries: list[tuple[pd.Timestamp, pd.Timestamp]],
-    n_blocks: int = 8,
-    n_bootstrap: int = 1000,
-    random_state: int = 42,
-) -> tuple[float, float]:
-    """Block bootstrap on OOS model trades → distribution of pooled Profit Factor.
-
-    Args:
-        model_times: Per-window trade timestamp arrays.
-        model_rets: Per-window trade return arrays.
-        window_boundaries: OOS window (start, end) pairs aligned with trade lists.
-        n_blocks: Contiguous blocks per OOS window.
-        n_bootstrap: Bootstrap resample count.
-        random_state: RNG seed.
-
-    Returns:
-        Tuple of (5th_percentile_pf, 95th_percentile_pf).
-    """
-    rng = np.random.default_rng(random_state)
-    all_blocks: list[np.ndarray] = []
-
-    for w_idx, (w_start, w_end) in enumerate(window_boundaries):
-        block_edges = pd.date_range(start=w_start, end=w_end, periods=n_blocks + 1).values
-        m_t = model_times[w_idx]
-        m_r = model_rets[w_idx]
-        for i in range(n_blocks):
-            mask = (m_t >= block_edges[i]) & (m_t < block_edges[i + 1])
-            all_blocks.append(m_r[mask])
-
-    n_total_blocks = len(all_blocks)
-    if n_total_blocks == 0:
-        return float("nan"), float("nan")
-
-    pf_dist = np.empty(n_bootstrap, dtype=np.float64)
-    for b in range(n_bootstrap):
-        idx = rng.choice(n_total_blocks, size=n_total_blocks, replace=True)
-        chunks = [all_blocks[i] for i in idx if len(all_blocks[i]) > 0]
-        selected = np.concatenate(chunks) if chunks else np.array([])
-        pf_dist[b] = _profit_factor(selected)
-
-    return float(np.percentile(pf_dist, 5)), float(np.percentile(pf_dist, 95))
-
-
 def run_walk_forward(
     df_raw: pd.DataFrame,
     symbol: str,

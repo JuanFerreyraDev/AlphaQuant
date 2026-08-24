@@ -69,30 +69,30 @@ Este script reporta:
 | **(d) Val vs test regime**                   | Comparación de retorno acumulado y volatilidad train/val/test. Si `test_std > 2 × train_std`, el test es structuralmente diferente: el modelo generalizará mal. Rechazar el activo o extender el periodo train.                           |
 | **(e) Point-biserial corr(feature, target)** | Top-5 correlaciones en train. Si TODAS las correlaciones son <                                                                                                                                                                            | 0.03 | , no hay señal lineal detectable → abandona el activo, no pierdas tiempo con XGB. |
 
-#### 1.3 Diagnósticos profundos (tools/diagnostics/)
+#### 1.3 Diagnósticos profundos (CLI unificado)
 
-Si el chequeo Level-1 pasa, correr los scripts de EDA riguroso:
+Si el chequeo Level-1 pasa, correr los sub-comandos de EDA riguroso con `aq`:
 
 ```bash
 # 1. Separar "beta del mercado" vs "alpha del clasificador"
-python3 tools/diagnostics/diagnose_naive_baseline.py --symbol BTC_USDT
+python -m tools.aq diagnose-naive-baseline BTC_USDT
 # Respuesta: Si naive_long PF > model PF en val, tu modelo NO tiene timing
 #           edge; todo es drift direccional del activo.
 
-# 2. Comparación de regímenes temporal
-python3 tools/diagnostics/diagnose_regimes_rigorous.py --symbol BTC_USDT
+# 2. Comparación de regímenes temporal (bootstrap riguroso)
+python -m tools.aq diagnose-regimes-rigorous BTC_USDT
 # Respuesta: ¿El split train-val-test preserva estadísticas de régimen?
-#           Si hay regime shift detectable (KS-test p < 0.05), el baseline
-#           nunca pasará el gate.
+#           Bootstrap p5/p95 CI en delta model-vs-naive confirma diferencia.
 
-# 3. Barrido de swing × retorno
-python3 tools/diagnostics/diagnose_swing_and_regimes.py --symbol BTC_USDT
-# Respuesta: Sensibilidad del PF a swing_period. Sirve para confirmar
-#           que swing=10 no es un punto crítico de overfitting accidental.
+# 3. Barrido de swing × retorno con validación cross-régimen
+python -m tools.aq diagnose-swing-and-regimes BTC_USDT
+# Respuesta: Sensibilidad del PF a swing_period (Part A). Validación cross-régimen
+#           (Part B). Sirve para confirmar que swing=10 no es overfitting accidental.
 
 # 4. Barrido de timeframe × swing
-python3 tools/diagnostics/diagnose_timeframe_swing_sweep.py --symbol BTC_USDT --timeframe 1h
-# Respuesta: Confirma que el modelo funciona en diferentes timeframes y swings
+python -m tools.aq diagnose-timeframe-swing-sweep BTC_USDT --timeframe 1h
+# Respuesta: Confirma que el modelo funciona en diferentes timeframes y swings.
+#           Sanity check de ATR-como-% del precio para validar escaling TP/SL.
 ```
 
 ### 🔴 ¿Por qué hacemos esto?
@@ -327,6 +327,54 @@ TODO experimento que no pasó el gate DEBE ser archivado en `tools/legacy_archiv
 - **Exp02 funding_rate_current:** 1/8 PASS (solo 4h×multiclass_3, Δp5=+0.0799). Resultado estadísticamente indistinguible de ruido dado el volumen de pruebas acumuladas (~1.2 falsos positivos esperados en 24 configs evaluadas). No se sostiene cross-formulación en el mismo TF (4h×binary empeora con el mismo feature). Tratado como DESCARTADO, no como hallazgo parcial.
 - **Exp03 taker_buy_ratio:** 0/8 PASS. Ratio puntual de volumen agresor NO es señal ortogonal.
 - **Exp04 regression_return:** 0/6 PASS. Formulación de regresión de retorno continuo (`target_ret`). 0/6 configs (3 activos × 2 TFs) pasan el gate `ΔPF_p5 > 0.0` tras corregir el bug de sentinel (`THRESHOLD_NOT_FOUND = -1.0`). Muestra compresión masiva de varianza en predicciones (~26× vs varianza real del target). Descartado.
+
+---
+
+## Apéndice C — Cierre de la Investigación On-Chain (Piloto BTC_USDT, Agosto 2026)
+
+### Resumen
+
+Un estudio piloto evaluó dos fuentes de datos on-chain/mempool como features ortogonales en BTC_USDT. La investigación siguió el protocolo estándar de A/B test (swing=10, tp=1.5×ATR, sl=1.0×ATR, ventana=6m/step=6m, bootstrap 1000/8 bloques, seed=42) con las tres formulaciones (binary_homerun, multiclass_3, regression_return) en timeframes 4h y 1h.
+
+**Antes de correr cualquier A/B test**, un barrido de config (159 runs, 24 combinaciones de swing×tp×sl, perfil CONTROL únicamente) confirmó que la config default actual (swing=10, tp=1.5, sl=1.0) no es claramente subóptima. Ninguna combinación alternativa superó el chequeo de rigor de 3 criterios (estabilidad de semilla, consistencia cross-formulación, ancho de CI). Config default sin cambios.
+
+### Features On-Chain Evaluados
+
+#### Exp05 — `onchain_active_addresses` (Blockchain.com)
+- **Fuente:** `https://api.blockchain.info/charts/n-unique-addresses?timespan=all&format=json`
+- **Métrica:** Conteo diario de direcciones Bitcoin únicas utilizadas — medida directa de actividad de red, sin clasificación de wallets de exchange.
+- **Shift aplicado:** +2 días (conservador; Blockchain.com no publica SLA de latencia para este endpoint).
+- **Cobertura:** 2009 al presente, 1 request HTTP, sin API key.
+- **Resultado:** 0/6 PASS en el gate. Un único PASS bruto (1h×binary_homerun TREATMENT, p5=+0.0082) no superó el rigor: la semilla 99 dio p5=−0.0007, y ambas formulaciones hermanas (multiclass_3 p5=−0.1003, regression_return p5=−0.0020) fallaron. **DESCARTADO.**
+
+#### Exp06 — `mempool_fee_rate_p50` (mempool.space)
+- **Fuente:** `https://mempool.space/api/v1/mining/blocks/fee-rates/all`
+- **Métrica:** Mediana del fee-rate (sat/vB, p50) agregada sobre ~144–153 bloques confirmados por día calendario. Proxy directo de presión de congestión del mempool.
+- **Shift aplicado:** +1 día (igual que trend_htf). El backend de mempool.space indexa fee_rate_percentiles de forma sincrónica en el mismo ciclo de procesamiento de bloque que la confirmación, directamente desde Bitcoin Core RPC — sin pipeline asíncrono ni delay adicional (verificado en `backend/src/api/blocks.ts`).
+- **Asignación de día:** Verificada contra 6 entradas reales de la API: los 2420 timestamps de 2020–2026 caen todos entre las 06:43 y las 14:10 UTC (0 entradas en zonas de riesgo de corrimiento de día). `normalize()` siempre asigna el día calendario correcto.
+- **Cobertura:** 2009 al presente, 1 request HTTP (~955 KB), sin API key. Sin posibilidad de revisión retroactiva (los bloques Bitcoin confirmados son inmutables).
+- **Resultado:** 0/6 PASS en el gate. Un único PASS bruto (1h×regression_return TREATMENT, p5=+0.0094) no superó el rigor: la estabilidad de semilla pasó (las 3 semillas positivas, muy estables), pero ambas formulaciones hermanas fallaron (binary_homerun p5=−0.0785, multiclass_3 p5=−0.0303). **DESCARTADO.**
+
+### Infraestructura Construida (Retenida Independientemente de los Resultados)
+
+Toda la infraestructura del piloto está commiteada y con cobertura de tests. Permanece disponible para uso futuro en otros activos o configuraciones:
+
+| Componente | Archivo | Notas |
+|---|---|---|
+| Fetcher (Blockchain.com) | `src/brain/data_fetcher.py` → `fetch_onchain_active_addresses` | Shift +2d en merge |
+| Fetcher (mempool.space) | `src/brain/data_fetcher.py` → `fetch_mempool_fee_rate_median` | Shift +1d en merge |
+| Path helpers | `src/config/paths.py` | `get_onchain_active_addresses_path`, `get_mempool_fee_rate_path`, loaders |
+| Funciones de merge | `src/brain/features.py` | `add_onchain_active_addresses` (+2d), `add_mempool_fee_rate_p50` (+1d) |
+| Perfiles de enriquecimiento | `src/pipeline/feature_profiles.py` | `onchain_activity`, `onchain_fee_pressure` |
+| Tests de leakage | `tests/features/` | `test_onchain_active_addresses_leakage.py` (8 tests), `test_mempool_fee_rate_leakage.py` (9 tests) |
+
+**Suite de tests total tras el piloto:** 327 tests (318 pre-piloto + 9 nuevos).
+
+### Conclusiones
+
+Ninguna fuente on-chain produjo una señal que generalice entre formulaciones bajo el protocolo actual en BTC_USDT. El patrón consistente a través de los 6 experimentos A/B (trend_htf, funding_rate, taker_buy_ratio, formulación regression_return, onchain_active_addresses, mempool_fee_rate_p50) es que los PASS brutos no sobreviven la validación cross-formulación. Esto es consistente con ~54 comparaciones acumuladas generando ruido a la tasa esperada de falsos positivos.
+
+**Próximos pasos (no pre-comprometidos):** Piloto en ETH_USDT con los mismos features on-chain, si está justificado; o fuentes de datos alternativas (Dune Analytics, Etherscan) para métricas específicas de ETH. No hay re-evaluación programada de los 6 features descartados — permanecen como candidatos únicamente si evidencia independiente lo justifica.
 
 ### 🔴 ¿Por qué hacemos esto?
 
@@ -622,7 +670,10 @@ python -m src.brain.data_fetcher BTC_USDT --funding-rate
 
 # === DIAGNOSTICS ===
 python -m tools.aq diagnose-data BTC_USDT --timeframe 4h
-python3 tools/diagnostics/diagnose_naive_baseline.py
+python -m tools.aq diagnose-naive-baseline BTC_USDT
+python -m tools.aq diagnose-regimes-rigorous BTC_USDT
+python -m tools.aq diagnose-swing-and-regimes BTC_USDT
+python -m tools.aq diagnose-timeframe-swing-sweep BTC_USDT --timeframe 1h
 
 # === RESEARCH ===
 python -m tools.aq baseline ETH_USDT --timeframes 4h 1h --fetch
@@ -644,7 +695,7 @@ pytest tests/test_oos_validation.py -v             # Walk-Forward
 | Criterio                    | Valor Pre-registrado | Estado Actual                                                                 |
 | --------------------------- | -------------------- | ----------------------------------------------------------------------------- |
 | `pooled_trade_count` MÍNIMO | `≥ 300`              | Hardcodeado en `oos_validation.py`                                            |
-| Baseline Gate (ΔPF vs naive) | `ΔPF_p5 > 0.0`      | Hardcodeado en `experiment_defaults.py` (`MIN_BASELINE_DELTA_P5 = 0.0`) y `oos_validation.py` (`MIN_BOOTSTRAP_P5 = 0.0`) — baseline y A/B comparten el mismo mecanismo paired bootstrap vs naive_long. PF absoluto > 1.0 NO es gate. |
+| Baseline Gate (ΔPF vs naive) | `ΔPF_p5 > 0.0`      | Hardcodeado en `oos_validation.py` (`MIN_BOOTSTRAP_P5 = 0.0`) — baseline y A/B comparten el mismo mecanismo paired bootstrap vs naive_long. PF absoluto > 1.0 NO es gate. |
 | A/B Test Gate (Delta PF)    | `ΔPF_p5 > 0.0`       | Hardcodeado en `oos_validation.py` (`MIN_BOOTSTRAP_P5 = 0.0`)                 |
 | Bootstrap iteraciones       | `1000`               | Default en `ExperimentConfig.n_bootstrap`                                     |
 | Bloques por ventana         | `8`                  | Default en `ExperimentConfig.n_blocks`                                        |

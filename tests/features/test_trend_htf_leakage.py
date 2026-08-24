@@ -1,190 +1,218 @@
-"""Leakage verification test for add_trend_htf.
+"""Leakage verification tests for add_trend_htf.
 
 Verifies that every sub-daily bar inherits the trend_htf value from the
 MOST RECENT FULLY CLOSED daily bar — never the daily bar that is still
 in progress on the same calendar day.
 
-Run: python3 tests/features/test_trend_htf_leakage.py
+Each test_ function is independently collectable by pytest.
 """
 
-import sys
-from pathlib import Path
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import pandas_ta as ta
+import pytest
 
 from src.brain.features import add_trend_htf
 
 
-def main() -> None:
-    print("=" * 70)
-    print("LEAKAGE VERIFICATION: add_trend_htf merge_asof temporal ordering")
-    print("=" * 70)
+# ---------------------------------------------------------------------------
+# Shared fixtures / helpers
+# ---------------------------------------------------------------------------
 
-    # ------------------------------------------------------------------
-    # Step 1 — Build mock daily data with DISTINCT close values per day.
-    # Each day gets a unique close (100 + day_number) so after EMA200
-    # warms up, trend_htf will be distinct and traceable per day.
-    # ------------------------------------------------------------------
-    n_days = 300
+def _build_daily_df(n_days: int = 300) -> tuple[pd.DataFrame, pd.DatetimeIndex, np.ndarray]:
+    """Return (df_1d, dates_1d, close_1d) with monotonic closes."""
     dates_1d = pd.date_range("2023-01-01", periods=n_days, freq="D")
-    close_1d = 100.0 + np.arange(n_days)  # monotonic 100, 101, 102, ...
+    close_1d = 100.0 + np.arange(n_days)
     df_1d = pd.DataFrame(
         {
-            "open": close_1d - 0.5,
-            "high": close_1d + 2.0,
-            "low": close_1d - 2.0,
-            "close": close_1d,
-            "volume": np.ones(n_days) * 1000,
+            "open":   close_1d - 0.5,
+            "high":   close_1d + 2.0,
+            "low":    close_1d - 2.0,
+            "close":  close_1d,
+            "volume": np.ones(n_days) * 1000.0,
         },
         index=dates_1d,
     )
+    return df_1d, dates_1d, close_1d
 
-    # Pre-compute the expected per-day trend_htf (using the same formula
-    # as add_trend_htf, WITHOUT the index shift) so we can check which
-    # value ends up on which sub-daily bar.
-    import pandas_ta as ta
 
-    df_1d_check = df_1d.copy()
-    df_1d_check["ema_200_1d"] = ta.ema(df_1d_check["close"], length=200)
-    df_1d_check["trend_htf_expected"] = (
-        df_1d_check["close"] - df_1d_check["ema_200_1d"]
-    ) / df_1d_check["ema_200_1d"]
+def _precompute_expected(df_1d: pd.DataFrame) -> pd.Series:
+    """Compute trend_htf WITHOUT the index shift (reference values only)."""
+    df_check = df_1d.copy()
+    df_check["ema_200_1d"] = ta.ema(df_check["close"], length=200)
+    df_check["trend_htf_expected"] = (
+        df_check["close"] - df_check["ema_200_1d"]
+    ) / df_check["ema_200_1d"]
+    return df_check["trend_htf_expected"]
 
-    # Pick 3 days where EMA200 is warmed up and values are well separated.
-    # Day 250 → index 250 → close=350 → date 2023-09-08
-    # Day 251 → index 251 → close=351 → date 2023-09-09
-    # Day 252 → index 252 → close=352 → date 2023-09-10
-    day_idx_A = 250  # Closed daily bar A (becomes available at midnight 9/9)
-    day_idx_B = 251  # Closed daily bar B (becomes available at midnight 9/10)
-    day_idx_C = 252  # Closed daily bar C (becomes available at midnight 9/11)
 
-    val_A = df_1d_check["trend_htf_expected"].iloc[day_idx_A]
-    val_B = df_1d_check["trend_htf_expected"].iloc[day_idx_B]
-    val_C = df_1d_check["trend_htf_expected"].iloc[day_idx_C]
+# ---------------------------------------------------------------------------
+# Test 1 — add_trend_htf succeeds on valid input
+# ---------------------------------------------------------------------------
 
-    print(f"\nDistinct per-day trend_htf values (after EMA200 warmup):")
-    print(f"  Bar A (day {day_idx_A}, {dates_1d[day_idx_A].date()}, close={close_1d[day_idx_A]:.0f}): {val_A:+.8f}")
-    print(f"  Bar B (day {day_idx_B}, {dates_1d[day_idx_B].date()}, close={close_1d[day_idx_B]:.0f}): {val_B:+.8f}")
-    print(f"  Bar C (day {day_idx_C}, {dates_1d[day_idx_C].date()}, close={close_1d[day_idx_C]:.0f}): {val_C:+.8f}")
-
-    distinct_ok = (
-        not np.isnan(val_A) and not np.isnan(val_B) and not np.isnan(val_C)
-        and abs(val_A - val_B) > 1e-8
-        and abs(val_B - val_C) > 1e-8
+def test_add_trend_htf_returns_true() -> None:
+    """add_trend_htf must return (df, True) when 1d data is valid."""
+    df_1d, dates_1d, close_1d = _build_daily_df()
+    n_sub = 3
+    df_sub = pd.DataFrame(
+        {"close": [350.0, 351.0, 352.0]},
+        index=pd.DatetimeIndex([
+            pd.Timestamp("2023-09-09 00:00"),
+            pd.Timestamp("2023-09-09 04:00"),
+            pd.Timestamp("2023-09-10 00:00"),
+        ]),
     )
-    assert distinct_ok, "Test setup error: expected distinct per-day values"
-    print("  ✓ Per-day values are distinct and non-NaN\n")
+    _, ok = add_trend_htf(df_sub, df_1d)
+    assert ok is True, "add_trend_htf returned False on valid input"
 
-    # ------------------------------------------------------------------
-    # Step 2 — Build 4h sub-daily candles at KEY TIMESTAMPS around the
-    # daily boundaries. We want to test:
-    #   - Bars *during* day B (Sep 9): must see bar A only (bar B open!)
-    #   - Midnight between B/C (Sep 10 00:00): bar B has just closed
-    #   - Bars *during* day C (Sep 10): must see bar B only (bar C open!)
-    # ------------------------------------------------------------------
-    # Day B = 2023-09-09  (index 251, daily OPEN at 00:00, CLOSE at 2023-09-10 00:00)
-    # Day C = 2023-09-10  (index 252, daily OPEN at 00:00, CLOSE at 2023-09-11 00:00)
+
+# ---------------------------------------------------------------------------
+# Test 2 — Per-day values are distinct and EMA200 is warmed up
+# ---------------------------------------------------------------------------
+
+def test_anchor_values_distinct_and_non_nan() -> None:
+    """Verify the test fixture itself: EMA200 warmed up, values distinct."""
+    df_1d, dates_1d, _ = _build_daily_df()
+    expected = _precompute_expected(df_1d)
+
+    val_A = expected.iloc[250]
+    val_B = expected.iloc[251]
+    val_C = expected.iloc[252]
+
+    assert not np.isnan(val_A), "val_A is NaN — EMA200 not warmed up at day 250"
+    assert not np.isnan(val_B), "val_B is NaN"
+    assert not np.isnan(val_C), "val_C is NaN"
+    assert abs(val_A - val_B) > 1e-8, "val_A and val_B are not distinct"
+    assert abs(val_B - val_C) > 1e-8, "val_B and val_C are not distinct"
+
+
+# ---------------------------------------------------------------------------
+# Test 3 — Bars DURING a day inherit the PRIOR closed day's value (no leak)
+# ---------------------------------------------------------------------------
+
+def test_bars_during_day_inherit_prior_closed_bar() -> None:
+    """Bars opening during day B must see val_A, never the open bar B."""
+    df_1d, dates_1d, _ = _build_daily_df()
+    expected = _precompute_expected(df_1d)
+    val_A = expected.iloc[250]
+
+    # Day B = 2023-09-09 (index 251). Bar B is still open during this day.
+    # All 4h bars from 00:00 through 20:00 must inherit val_A (day 250).
     sub_ts = [
-        # --- During day B (September 9) — bar B is OPEN, must NOT leak val_B
-        pd.Timestamp("2023-09-09 00:00:00"),  # 4h bar 0-4h: bar B *just opened*
-        pd.Timestamp("2023-09-09 04:00:00"),  # 4h bar 4-8h: bar B still open
-        pd.Timestamp("2023-09-09 12:00:00"),  # 4h bar 12-16h: bar B still open
-        pd.Timestamp("2023-09-09 20:00:00"),  # 4h bar 20-24h: last 4h of bar B
-        # --- Midnight boundary: bar B CLOSES, val_B becomes available
-        pd.Timestamp("2023-09-10 00:00:00"),  # 4h bar at midnight: bar B just closed
-        # --- During day C (September 10) — bar C is OPEN, must NOT leak val_C
+        pd.Timestamp("2023-09-09 00:00:00"),
+        pd.Timestamp("2023-09-09 04:00:00"),
+        pd.Timestamp("2023-09-09 12:00:00"),
+        pd.Timestamp("2023-09-09 20:00:00"),
+    ]
+    n = len(sub_ts)
+    df_sub = pd.DataFrame(
+        {"close": np.linspace(350.0, 351.0, n)},
+        index=pd.DatetimeIndex(sub_ts),
+    )
+    df_merged, _ = add_trend_htf(df_sub, df_1d)
+
+    for ts in sub_ts:
+        got = df_merged.loc[ts, "trend_htf"]
+        assert abs(got - val_A) < 1e-10, (
+            f"LEAK at {ts}: bar during day B saw {got:+.8f} "
+            f"(expected val_A={val_A:+.8f} from prior closed bar)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test 4 — Bar AT midnight (day close boundary) sees the just-closed bar
+# ---------------------------------------------------------------------------
+
+def test_midnight_bar_sees_just_closed_daily_bar() -> None:
+    """Bar at 2023-09-10 00:00 must see val_B (bar B just closed)."""
+    df_1d, _, _ = _build_daily_df()
+    expected = _precompute_expected(df_1d)
+    val_B = expected.iloc[251]  # day index 251 = 2023-09-09
+
+    midnight_ts = pd.Timestamp("2023-09-10 00:00:00")
+    df_sub = pd.DataFrame({"close": [351.0]}, index=pd.DatetimeIndex([midnight_ts]))
+    df_merged, _ = add_trend_htf(df_sub, df_1d)
+
+    got = df_merged.loc[midnight_ts, "trend_htf"]
+    assert abs(got - val_B) < 1e-10, (
+        f"Midnight bar at {midnight_ts} saw {got:+.8f}; "
+        f"expected val_B={val_B:+.8f} (bar B just closed)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — Full boundary sequence: day B slots → val_A, then day C → val_B
+# ---------------------------------------------------------------------------
+
+def test_full_boundary_sequence() -> None:
+    """End-to-end: 9 timestamps across two day boundaries, all correct."""
+    df_1d, dates_1d, _ = _build_daily_df()
+    expected = _precompute_expected(df_1d)
+    val_A = expected.iloc[250]
+    val_B = expected.iloc[251]
+    val_C = expected.iloc[252]
+
+    sub_ts = [
+        # During day B (Sep 9) — must see val_A
+        pd.Timestamp("2023-09-09 00:00:00"),
+        pd.Timestamp("2023-09-09 04:00:00"),
+        pd.Timestamp("2023-09-09 12:00:00"),
+        pd.Timestamp("2023-09-09 20:00:00"),
+        # Midnight: bar B just closed — must see val_B
+        pd.Timestamp("2023-09-10 00:00:00"),
+        # During day C (Sep 10) — must see val_B
         pd.Timestamp("2023-09-10 04:00:00"),
         pd.Timestamp("2023-09-10 12:00:00"),
         pd.Timestamp("2023-09-10 20:00:00"),
-        # --- Next midnight: bar C just closed, val_C available
+        # Midnight: bar C just closed — must see val_C
         pd.Timestamp("2023-09-11 00:00:00"),
     ]
-    n_sub = len(sub_ts)
-    df_4h = pd.DataFrame(
-        {
-            "open": np.linspace(350.0, 353.0, n_sub),
-            "high": np.linspace(351.0, 354.0, n_sub),
-            "low": np.linspace(349.0, 352.0, n_sub),
-            "close": np.linspace(350.5, 353.5, n_sub),
-            "volume": np.ones(n_sub) * 500,
-        },
-        index=pd.DatetimeIndex(sub_ts),
-    )
-
-    # ------------------------------------------------------------------
-    # Step 3 — Run add_trend_htf and inspect the resulting assignments
-    # ------------------------------------------------------------------
-    df_merged, ok = add_trend_htf(df_4h, df_1d)
-    assert ok is True, "add_trend_htf returned False unexpectedly"
-
-    print(f"{'Sub-daily timestamp':<25} {'Expected':>12} {'Got':>12} {'Match':>7}")
-    print("-" * 60)
-
-    errors: list[str] = []
-
-    # Expected mapping:
-    # 2023-09-09 00:00 → val_A (Bar A: closed at 2023-09-09 00:00; Bar B just opened)
-    # 2023-09-09 04:00 → val_A
-    # 2023-09-09 12:00 → val_A
-    # 2023-09-09 20:00 → val_A
-    # 2023-09-10 00:00 → val_B (Bar B: just closed at 2023-09-10 00:00)
-    # 2023-09-10 04:00 → val_B
-    # 2023-09-10 12:00 → val_B
-    # 2023-09-10 20:00 → val_B
-    # 2023-09-11 00:00 → val_C (Bar C: just closed at 2023-09-11 00:00)
     expected_per_ts = [val_A, val_A, val_A, val_A, val_B, val_B, val_B, val_B, val_C]
 
-    for ts, expected in zip(sub_ts, expected_per_ts):
-        got = df_merged.loc[ts, "trend_htf"]
-        match = abs(got - expected) < 1e-10
-        status = "✓" if match else "✗ LEAK!"
-        print(
-            f"{str(ts):<25} {expected:>+12.8f} {got:>+12.8f} {status:>7}"
-        )
-        if not match:
-            errors.append(
-                f"LEAK at {ts}: expected {expected:+.8f} (prior closed bar), "
-                f"got {got:+.8f} — a still-open daily bar leaked into the merge!"
-            )
-
-    print("-" * 60)
-
-    # ------------------------------------------------------------------
-    # Step 4 — Also verify the FIRST bar in the range (before any daily
-    # bar has closed + shifted) is NaN — this confirms the shift is real
-    # and we're not accidentally using pre-close data.
-    # ------------------------------------------------------------------
-    first_4h = pd.Timestamp("2023-01-01 00:00:00")
-    df_4h_first = pd.DataFrame(
-        {"close": [100.0]}, index=pd.DatetimeIndex([first_4h])
+    n = len(sub_ts)
+    df_sub = pd.DataFrame(
+        {"close": np.linspace(350.0, 353.0, n)},
+        index=pd.DatetimeIndex(sub_ts),
     )
-    df_merged_first, _ = add_trend_htf(df_4h_first, df_1d)
-    first_trend = df_merged_first.loc[first_4h, "trend_htf"]
-    print(f"\nFirst 4h bar ({first_4h.date()}) trend_htf is NaN:", np.isnan(first_trend))
-    if not np.isnan(first_trend):
-        errors.append(
-            f"First bar should be NaN (no closed daily bar available yet), "
-            f"but got {first_trend:+.8f}"
+    df_merged, _ = add_trend_htf(df_sub, df_1d)
+
+    for ts, exp in zip(sub_ts, expected_per_ts):
+        got = df_merged.loc[ts, "trend_htf"]
+        assert abs(got - exp) < 1e-10, (
+            f"LEAK at {ts}: expected {exp:+.8f}, got {got:+.8f}"
         )
 
-    # ------------------------------------------------------------------
-    # Summary
-    # ------------------------------------------------------------------
-    if errors:
-        print("\n❌ FAILURE — leakage detected!")
-        for e in errors:
-            print(f"   • {e}")
-        sys.exit(1)
-    else:
-        print("\n✅ PASS — zero leakage. Every sub-daily bar inherits ONLY from "
-              "fully closed daily bars (closed at or before the bar's open time).")
-        print("   • Bars during day X → inherit day (X-1) trend_htf")
-        print("   • Bars at midnight → inherit the just-closed day's trend_htf")
-        print("   • No bar ever sees the same-calendar-day still-open daily bar")
+
+# ---------------------------------------------------------------------------
+# Test 6 — First bar (before any daily close + shift) must be NaN
+# ---------------------------------------------------------------------------
+
+def test_first_bar_is_nan_before_shift_window() -> None:
+    """Bar at 2023-01-01 00:00 must be NaN — no closed daily bar yet available."""
+    df_1d, _, _ = _build_daily_df()
+
+    first_ts = pd.Timestamp("2023-01-01 00:00:00")
+    df_sub = pd.DataFrame({"close": [100.0]}, index=pd.DatetimeIndex([first_ts]))
+    df_merged, _ = add_trend_htf(df_sub, df_1d)
+
+    val = df_merged.loc[first_ts, "trend_htf"]
+    assert np.isnan(val), (
+        f"First bar should be NaN (shift is real), but got {val:+.8f}"
+    )
 
 
-if __name__ == "__main__":
-    main()
+# ---------------------------------------------------------------------------
+# Test 7 — Empty daily data returns (df, False)
+# ---------------------------------------------------------------------------
+
+def test_empty_daily_returns_false() -> None:
+    """add_trend_htf must degrade gracefully when daily df is empty."""
+    df_sub = pd.DataFrame(
+        {"close": [350.0]},
+        index=pd.DatetimeIndex([pd.Timestamp("2023-09-09 04:00")]),
+    )
+    df_out, ok = add_trend_htf(df_sub, pd.DataFrame())
+    assert ok is False, "Expected False when daily data is empty"
+    assert "trend_htf" not in df_out.columns

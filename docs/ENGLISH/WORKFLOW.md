@@ -69,28 +69,30 @@ This diagnostic reports:
 | **(d) Val vs test regime** | Train/val/test cumulative return and volatility comparison. If `test_std > 2 × train_std`, the test period is structurally different: the model will generalize poorly. Reject the asset or extend the training window. |
 | **(e) Point-biserial corr(feature, target)** | Top-5 correlations in training data. If ALL correlations are < 0.03, there is no linear signal detectable → abandon the asset, do not waste time on XGBoost. |
 
-#### 1.3 Deep Diagnostics (`tools/diagnostics/`)
+#### 1.3 Deep Diagnostics (Unified CLI)
 
-If Level-1 checks pass, run rigorous EDA scripts:
+If Level-1 checks pass, run rigorous EDA via `aq` subcommands:
 
 ```bash
 # 1. Decouple "market beta" vs "classifier alpha"
-python3 tools/diagnostics/diagnose_naive_baseline.py --symbol BTC_USDT
+python -m tools.aq diagnose-naive-baseline BTC_USDT
 # Output: If naive_long PF > model PF in val, your model has NO timing edge;
 #         performance is driven entirely by asset directional drift.
 
-# 2. Temporal regime comparison
-python3 tools/diagnostics/diagnose_regimes_rigorous.py --symbol BTC_USDT
+# 2. Temporal regime comparison (rigorous bootstrap)
+python -m tools.aq diagnose-regimes-rigorous BTC_USDT
 # Output: Does the train-val-test split preserve regime statistics?
-#         If significant regime shift is detected (KS-test p < 0.05), baseline will fail gates.
+#         If significant regime shift is detected, bootstrap p5/p95 CIs show non-zero model-vs-naive delta.
 
-# 3. Swing × return sweep
-python3 tools/diagnostics/diagnose_swing_and_regimes.py --symbol BTC_USDT
-# Output: Sensitivity of PF to swing_period. Confirms swing=10 is not an accidental overfitting point.
+# 3. Swing × return sweep with cross-regime validation
+python -m tools.aq diagnose-swing-and-regimes BTC_USDT
+# Output: Sensitivity of PF to swing_period (Part A). Cross-regime sanity (Part B).
+#         Confirms swing=10 is robust, not an accidental overfitting point.
 
 # 4. Timeframe × swing sweep
-python3 tools/diagnostics/diagnose_timeframe_swing_sweep.py --symbol BTC_USDT --timeframe 1h
+python -m tools.aq diagnose-timeframe-swing-sweep BTC_USDT --timeframe 1h
 # Output: Confirms model performance across different timeframes and swing periods.
+#         ATR-as-%-price sanity check to validate TP/SL ratio scaling.
 ```
 
 ### 🔴 Why do we do this?
@@ -323,6 +325,54 @@ EVERY experiment that fails the statistical gate MUST be archived under `tools/l
 - **Exp02 funding_rate_current:** 1/8 PASS (4h×multiclass_3 only, Δp5=+0.0799). Result statistically indistinguishable from noise given test volume (~1.2 expected false positives across 24 evaluated configs). Lacks cross-formulation support on the same timeframe (4h×binary degrades with the feature). Classified as DISCARDED.
 - **Exp03 taker_buy_ratio:** 0/8 PASS. Point-in-time aggressor buy volume ratio is not an orthogonal signal vs naive long.
 - **Exp04 regression_return:** 0/6 PASS. Continuous return regression formulation (`target_ret`). 0/6 configs (3 assets × 2 TFs) pass `ΔPF_p5 > 0.0` after correcting the sentinel bug (`THRESHOLD_NOT_FOUND = -1.0`). Prediction variance displays massive compression (~26× vs real target variance). Discarded.
+
+---
+
+## Appendix C — On-Chain Research Closure (BTC_USDT Pilot, August 2026)
+
+### Summary
+
+A pilot study evaluated two on-chain/mempool data sources as orthogonal features on BTC_USDT. The investigation followed the standard A/B test protocol (swing=10, tp=1.5×ATR, sl=1.0×ATR, window=6m/step=6m, bootstrap 1000/8 blocks, seed=42) with all three formulations (binary_homerun, multiclass_3, regression_return) on 4h and 1h timeframes.
+
+**Before any A/B test ran**, a config sweep (159 runs, 24 swing×tp×sl combinations, CONTROL profile only) confirmed that the current default config (swing=10, tp=1.5, sl=1.0) is not clearly suboptimal. No alternative combination passed the 3-criteria rigor check (seed stability, cross-formulation consistency, CI width). Default config unchanged.
+
+### On-Chain Features Evaluated
+
+#### Exp05 — `onchain_active_addresses` (Blockchain.com)
+- **Source:** `https://api.blockchain.info/charts/n-unique-addresses?timespan=all&format=json`
+- **Metric:** Daily count of unique Bitcoin addresses used — a direct network activity measure, no exchange wallet classification.
+- **Shift applied:** +2 days (conservative; Blockchain.com publishes no latency SLA for this endpoint).
+- **Coverage:** 2009 to present, 1 HTTP request, no API key.
+- **Result:** 0/6 PASS in gate. One raw PASS (1h×binary_homerun TREATMENT, p5=+0.0082) failed rigor: seed 99 yielded p5=−0.0007, and both formulation sisters (multiclass_3 p5=−0.1003, regression_return p5=−0.0020) failed. **DISCARDED.**
+
+#### Exp06 — `mempool_fee_rate_p50` (mempool.space)
+- **Source:** `https://mempool.space/api/v1/mining/blocks/fee-rates/all`
+- **Metric:** Median fee-rate (sat/vB, p50) aggregated over ~144–153 confirmed blocks per calendar day. Direct proxy for mempool congestion pressure.
+- **Shift applied:** +1 day (same as trend_htf). The mempool.space backend indexes fee_rate_percentiles synchronously in the same block-processing cycle as confirmation, directly from Bitcoin Core RPC — no async pipeline or additional delay (verified in `backend/src/api/blocks.ts`).
+- **Day assignment:** Verified against 6 real API entries: all 2420 timestamps in 2020–2026 fall between 06:43 and 14:10 UTC (0 entries in day-crossing risk zones). `normalize()` always assigns the correct calendar day.
+- **Coverage:** 2009 to present, 1 HTTP request (~955 KB), no API key. No retroactive revision possible (confirmed Bitcoin blocks are immutable).
+- **Result:** 0/6 PASS in gate. One raw PASS (1h×regression_return TREATMENT, p5=+0.0094) failed rigor: seed stability passed (all 3 seeds positive, very stable), but both formulation sisters failed (binary_homerun p5=−0.0785, multiclass_3 p5=−0.0303). **DISCARDED.**
+
+### Infrastructure Built (Retained Regardless of Results)
+
+All infrastructure from this pilot is committed and test-covered. It remains available for future use on other assets or configurations:
+
+| Component | File | Notes |
+|---|---|---|
+| Fetcher (Blockchain.com) | `src/brain/data_fetcher.py` → `fetch_onchain_active_addresses` | +2d shift at merge |
+| Fetcher (mempool.space) | `src/brain/data_fetcher.py` → `fetch_mempool_fee_rate_median` | +1d shift at merge |
+| Path helpers | `src/config/paths.py` | `get_onchain_active_addresses_path`, `get_mempool_fee_rate_path`, loaders |
+| Merge functions | `src/brain/features.py` | `add_onchain_active_addresses` (+2d), `add_mempool_fee_rate_p50` (+1d) |
+| Enrichment profiles | `src/pipeline/feature_profiles.py` | `onchain_activity`, `onchain_fee_pressure` |
+| Leakage tests | `tests/features/` | `test_onchain_active_addresses_leakage.py` (8 tests), `test_mempool_fee_rate_leakage.py` (9 tests) |
+
+**Total test suite after pilot:** 327 tests (318 pre-pilot + 9 new).
+
+### Conclusions
+
+Neither on-chain source produced a signal that generalizes across formulations under the current protocol on BTC_USDT. The consistent pattern across all 6 A/B experiments (trend_htf, funding_rate, taker_buy_ratio, regression_return formulation, onchain_active_addresses, mempool_fee_rate_p50) is that raw PASS results do not survive cross-formulation validation. This is consistent with ~54 accumulated comparisons generating noise at the expected false-positive rate.
+
+**Next steps (not pre-committed):** ETH_USDT pilot with the same on-chain features, if warranted; or alternative data sources (Dune Analytics, Etherscan) for ETH-specific metrics. No re-evaluation of the 6 discarded features is scheduled — they remain candidates only if independent evidence motivates it.
 
 ### 🔴 Why do we do this?
 
@@ -615,7 +665,10 @@ python -m src.brain.data_fetcher BTC_USDT --funding-rate
 
 # === DIAGNOSTICS ===
 python -m tools.aq diagnose-data BTC_USDT --timeframe 4h
-python3 tools/diagnostics/diagnose_naive_baseline.py
+python -m tools.aq diagnose-naive-baseline BTC_USDT
+python -m tools.aq diagnose-regimes-rigorous BTC_USDT
+python -m tools.aq diagnose-swing-and-regimes BTC_USDT
+python -m tools.aq diagnose-timeframe-swing-sweep BTC_USDT --timeframe 1h
 
 # === RESEARCH ===
 python -m tools.aq baseline ETH_USDT --timeframes 4h 1h --fetch
@@ -639,7 +692,7 @@ pytest tests/test_oos_validation.py -v             # Walk-Forward
 | Criterion | Pre-registered Value | Current Implementation |
 |-----------|----------------------|------------------------|
 | MINIMUM `pooled_trade_count` | `≥ 300` | Hardcoded in `oos_validation.py` |
-| Baseline Gate (ΔPF vs naive) | `ΔPF_p5 > 0.0` | Hardcoded in `experiment_defaults.py` (`MIN_BASELINE_DELTA_P5 = 0.0`) and `oos_validation.py` (`MIN_BOOTSTRAP_P5 = 0.0`) — baseline and A/B share identical paired bootstrap mechanism vs naive_long. Absolute PF > 1.0 is NOT a gate. |
+| Baseline Gate (ΔPF vs naive) | `ΔPF_p5 > 0.0` | Hardcoded in `oos_validation.py` (`MIN_BOOTSTRAP_P5 = 0.0`) — baseline and A/B share identical paired bootstrap mechanism vs naive_long. Absolute PF > 1.0 is NOT a gate. |
 | A/B Test Gate (Delta PF) | `ΔPF_p5 > 0.0` | Hardcoded in `oos_validation.py` (`MIN_BOOTSTRAP_P5 = 0.0`) |
 | Bootstrap iterations | `1000` | Default in `ExperimentConfig.n_bootstrap` |
 | Blocks per window | `8` | Default in `ExperimentConfig.n_blocks` |

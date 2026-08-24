@@ -55,21 +55,23 @@ AlphaQuant/
 │       └── logging_config.py         # Configuración centralizada de logging
 │
 ├── tools/                            # Scripts de CLI, diagnósticos y experimentos legacy
-│   ├── aq.py                         # CLI unificada: baseline / ab-test / diagnose-data
+│   ├── aq.py                         # CLI unificada: baseline / ab-test / diagnose-data / diagnose-naive-baseline / diagnose-regimes-rigorous / diagnose-swing-and-regimes / diagnose-timeframe-swing-sweep
 │   ├── visualize_val_signals.py      # Plotting de señales de validación
-│   ├── diagnostics/                  # Scripts de diagnóstico EDA riguroso
-│   │   ├── diagnose_naive_baseline.py    # Separar alpha (timing) vs beta (drift direccional)
-│   │   ├── diagnose_regimes_rigorous.py  # Comparación de regímenes train/val/test
-│   │   ├── diagnose_swing_and_regimes.py # Sensibilidad de swing × régimen
-│   │   ├── diagnose_timeframe_data.py    # Sanity check de data por timeframe
-│   │   └── diagnose_timeframe_swing_sweep.py # Barrido de parámetros
-│   └── legacy_archive/               # Experimento fallidos o supersedados (NO BORRAR)
-│       ├── exp01_trend_htf_walkforward.py
-│       ├── exp02_funding_rate_walkforward.py
-│       ├── exp03_taker_buy_ratio_walkforward.py
-│       ├── compare_binary_vs_multiclass.py
-│       ├── exp_eth_baseline_oos.py
-│       └── reconcile_naive_target_comparison.py
+│   ├── legacy_archive/               # Experimentos fallidos, supersedados y diagnósticos archivados
+│   │   ├── diagnostics/              # Scripts de diagnóstico archivados (ahora en aq.py)
+│   │   │   ├── diagnose_naive_baseline.py         # Usar: aq diagnose-naive-baseline
+│   │   │   ├── diagnose_regimes_rigorous.py       # Usar: aq diagnose-regimes-rigorous
+│   │   │   ├── diagnose_swing_and_regimes.py      # Usar: aq diagnose-swing-and-regimes
+│   │   │   ├── diagnose_timeframe_data.py         # Usar: aq diagnose-data
+│   │   │   ├── diagnose_timeframe_swing_sweep.py  # Usar: aq diagnose-timeframe-swing-sweep
+│   │   │   └── README.md             # Documentación del archivo
+│   │   ├── exp01_trend_htf_walkforward.py         # 0/8 PASS — EMA200 diaria sin alpha ortogonal
+│   │   ├── exp02_funding_rate_walkforward.py      # 1/8 PASS — nivel de ruido, descartado
+│   │   ├── exp03_taker_buy_ratio_walkforward.py   # 0/8 PASS — taker ratio no ortogonal
+│   │   ├── exp04_regression_return_walkforward.py # 0/6 PASS — formulación de regresión descartada
+│   │   ├── compare_binary_vs_multiclass.py
+│   │   ├── exp_eth_baseline_oos.py
+│   │   └── reconcile_naive_target_comparison.py
 │
 ├── tests/                            # Suite pytest (unit + integración + leakage)
 │   ├── unit/
@@ -87,7 +89,9 @@ AlphaQuant/
 │   ├── features/
 │   │   ├── test_funding_rate_leakage.py      # Verifica que funding solo existe para barras pre-liquidación
 │   │   ├── test_trend_htf_leakage.py         # Verifica que 1d data desplazada +1d antes de merge_asof
-│   │   └── test_taker_buy_ratio_semantics.py # Tests de semántica del ratio de volumen agresor
+│   │   ├── test_taker_buy_ratio_semantics.py # Tests de semántica del ratio de volumen agresor
+│   │   ├── test_onchain_active_addresses_leakage.py  # Verifica shift +2d para datos diarios de Blockchain.com
+│   │   └── test_mempool_fee_rate_leakage.py  # Verifica shift +1d para datos diarios de mempool.space
 │   ├── api/
 │   │   ├── test_binance_executor.py       # Sizing + filtros mock
 │   │   ├── test_notifier.py               # Formatos HTML correctos
@@ -98,7 +102,9 @@ AlphaQuant/
 │   ├── raw_csv/                      # OHLCV + Funding Rate (por símbolo y timeframe)
 │   │   └── {SYMBOL_USDT}/
 │   │       ├── 1h.csv | 4h.csv | 1d.csv
-│   │       └── funding_rate.csv
+│   │       ├── funding_rate.csv
+│   │       ├── onchain_active_addresses.csv        # Blockchain.com n-unique-addresses (solo BTC)
+│   │       └── onchain_mempool_fee_rate_p50.csv    # mempool.space fee-rates/all avgFee_50 (solo BTC)
 │   ├── models/                       # Modelos serializados + config.json por símbolo
 │   │   └── {SYMBOL_USDT}/
 │   │       ├── config.json           # Features, threshold, HP, last_trained, OOS sanity check
@@ -239,6 +245,8 @@ Registry declarativo de perfiles de enriquecimiento. Todos usan `merge_asof(dire
 | **trend_htf** | `technicals` + `sentiment` + `trend_htf` | `trend_htf` | `1d.csv` (EMA200 diaria, shift +1d) |
 | **funding_rate** | `technicals` + `sentiment` + `funding_rate` | `funding_rate_current` | `funding_rate.csv` (solo settlements pasados) |
 | **taker_buy_ratio** | `technicals` + `sentiment` + `taker_buy_ratio` | `taker_buy_ratio` | CSVs descargados con `--binance-rest` |
+| **onchain_activity** | `technicals` + `sentiment` + `onchain_active_addresses` | `onchain_active_addresses` | `onchain_active_addresses.csv` (Blockchain.com, shift +2d) |
+| **onchain_fee_pressure** | `technicals` + `sentiment` + `mempool_fee_rate_p50` | `mempool_fee_rate_p50` | `onchain_mempool_fee_rate_p50.csv` (mempool.space, shift +1d) |
 
 **14 Features de Control (baseline):**
 ```
@@ -357,33 +365,11 @@ Donde cada trade retorno = f(y_true[i]):
 cost_per_trade = 2×fee_rate + 2×slippage  (entrada + salida, ambos lados)
 ```
 
-### 4.2 Bootstrap Estadístico — Dos Mecanismos Distintos
+### 4.2 Bootstrap Estadístico
 
-El sistema usa **dos implementaciones de bootstrap** según el tipo de experimento:
+El sistema estima la distribución del **ΔPF = PF(tratamiento) − PF(naive)** con bloques **pareados** vía `_bootstrap_paired_blocks`:
 
-#### 4.2.1 `bootstrap_absolute_pf` — Baseline Screening
-
-**Implementación:** [oos_validation.py → bootstrap_absolute_pf](file:///home/juan/Desktop/Projects/AlphaQuant/src/utils/oos_validation.py#L242-L285)
-
-Usado en `run_baseline`. Estima la distribución del **PF absoluto del modelo** (no un delta). No hay naive baseline involucrado.
-
-```
-Pool global de bloques (todas las ventanas OOS concatenadas):
-  1. Para cada ventana OOS w: dividir trades del modelo en B=8 bloques contiguos
-  2. Agregar todos los bloques al pool global (n_ventanas × 8 bloques totales)
-  3. Para cada bootstrap iteración b ∈ {1..1000}:
-       a. Muestrear con repetición n_total_blocks índices del pool global
-       b. Concatenar los bloques seleccionados → rets_b
-       c. PF_b = PF(rets_b)
-
-Percentiles finales:
-  p5  = percentil 5  → cota inferior conservadora del PF verdadero
-  p95 = percentil 95
-
-Gate: p5 > 1.0  (baseline pasa si con 95% confianza el PF > 1.0)
-```
-
-#### 4.2.2 `_bootstrap_paired_blocks` — A/B Test
+#### 4.2.1 `_bootstrap_paired_blocks` — A/B Test
 
 **Implementación:** [oos_validation.py → _bootstrap_paired_blocks](file:///home/juan/Desktop/Projects/AlphaQuant/src/utils/oos_validation.py#L181-L239)
 
@@ -562,3 +548,5 @@ flowchart TD
 | **Todo merge de features externas usa `merge_asof(direction='backward')`** | Nunca `merge` exacto por índice ni `join` forward. Previene leakage look-ahead. |
 | **HTF diario (1d) debe tener shift +1 día antes del merge** | Una vela 4h del 12/08 NO puede heredar el 1d del 12/08 (todavía abierto). Debe heredar el 1d CERRADO del 11/08. Verificado en `test_trend_htf_leakage.py`. |
 | **Funding Rate sólo debe existir para barras con settlement ANTES de su inicio** | Liquidación 00/08/16 UTC. Una vela 4h de las 04:00 UTC NO incluye el funding de 08:00 UTC. Verificado en `test_funding_rate_leakage.py`. |
+| **Datos diarios on-chain (Blockchain.com) deben tener shift +2 días antes del merge** | Sin SLA de latencia publicado. Se asume hasta 24h de delay de agregación de forma conservadora (sin verificación empírica). Una barra en el día D solo puede ver el valor del día D-2. Verificado en `test_onchain_active_addresses_leakage.py`. |
+| **Datos diarios de mempool fee-rate (mempool.space) deben tener shift +1 día antes del merge** | El backend indexa fee_rate_percentiles de forma sincrónica desde Bitcoin Core RPC en el mismo ciclo de procesamiento de bloque (sin pipeline asíncrono). +1 día es suficiente y correcto, igual que trend_htf. Verificado en `test_mempool_fee_rate_leakage.py`. |

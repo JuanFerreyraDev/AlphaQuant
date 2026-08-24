@@ -10,12 +10,18 @@ import pandas as pd
 from src.brain.data_fetcher import get_fear_and_greed
 from src.brain.features import (
     add_funding_rate,
+    add_mempool_fee_rate_p50,
+    add_onchain_active_addresses,
     add_sentiment,
     add_taker_buy_ratio,
     add_trend_htf,
     compute_all_technicals,
 )
-from src.config.paths import load_funding_rate_csv
+from src.config.paths import (
+    load_funding_rate_csv,
+    load_mempool_fee_rate_csv,
+    load_onchain_active_addresses_csv,
+)
 from src.utils.helpers import SENTIMENT_COLS, load_csv_data
 
 EnrichmentFn = Callable[[pd.DataFrame, str], pd.DataFrame]
@@ -87,12 +93,38 @@ def _apply_taker_buy_ratio(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     return df
 
 
+def _apply_onchain_active_addresses(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    df_onchain = load_onchain_active_addresses_csv(symbol)
+    df, has_onchain = add_onchain_active_addresses(df, df_onchain)
+    if not has_onchain:
+        raise RuntimeError(
+            f"onchain_active_addresses not added for {symbol} — "
+            f"need data/raw_csv/{symbol}/onchain_active_addresses.csv. "
+            "Run: python -m tools.aq fetch-onchain BTC_USDT"
+        )
+    return df
+
+
+def _apply_mempool_fee_rate_p50(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    df_mempool = load_mempool_fee_rate_csv(symbol)
+    df, has_mempool = add_mempool_fee_rate_p50(df, df_mempool)
+    if not has_mempool:
+        raise RuntimeError(
+            f"mempool_fee_rate_p50 not added for {symbol} — "
+            f"need data/raw_csv/{symbol}/onchain_mempool_fee_rate_p50.csv. "
+            "Run: python -m src.brain.data_fetcher fetch-mempool BTC_USDT"
+        )
+    return df
+
+
 ENRICHMENT_REGISTRY: dict[str, EnrichmentFn] = {
     "technicals": lambda df, _symbol: compute_all_technicals(df),
     "sentiment": _apply_sentiment,
     "trend_htf": _apply_trend_htf,
     "funding_rate": _apply_funding_rate,
     "taker_buy_ratio": _apply_taker_buy_ratio,
+    "onchain_active_addresses": _apply_onchain_active_addresses,
+    "mempool_fee_rate_p50": _apply_mempool_fee_rate_p50,
 }
 
 
@@ -117,6 +149,18 @@ FEATURE_PROFILES: dict[str, FeatureProfile] = {
         name="taker_buy_ratio",
         enrichments=("technicals", "sentiment", "taker_buy_ratio"),
         treatment_col="taker_buy_ratio",
+    ),
+    "onchain_activity": FeatureProfile(
+        name="onchain_activity",
+        enrichments=("technicals", "sentiment", "onchain_active_addresses"),
+        treatment_col="onchain_active_addresses",
+        extra_csv_requirements=("onchain_active_addresses.csv",),
+    ),
+    "onchain_fee_pressure": FeatureProfile(
+        name="onchain_fee_pressure",
+        enrichments=("technicals", "sentiment", "mempool_fee_rate_p50"),
+        treatment_col="mempool_fee_rate_p50",
+        extra_csv_requirements=("onchain_mempool_fee_rate_p50.csv",),
     ),
 }
 

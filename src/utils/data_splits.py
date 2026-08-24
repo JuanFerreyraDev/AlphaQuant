@@ -91,6 +91,70 @@ def get_calibrated_constants(timeframe: str = "1d") -> dict[str, Any]:
     return dict(_TIMEFRAME_CALIBRATIONS["1d"])
 
 
+def _compute_block_floor(
+    min_trades: int,
+    bars_per_trade_estimate: float,
+    allocatable: int,
+    pct_floor: float,
+) -> int:
+    """Compute one block's size based on trade-count and percentage floors.
+
+    Pure calculation with no validation or side effects. Used by both
+    compute_dynamic_split and compute_train_val_split to ensure consistent
+    block sizing across 2-part and 3-part split strategies.
+
+    Args:
+        min_trades: Minimum trade count for this block
+            (e.g., STAT_FLOOR_VAL_TRADES).
+        bars_per_trade_estimate: swing_period * bars_per_trade_safety_factor.
+        allocatable: n_bars - embargo_total (shared pool after embargo).
+        pct_floor: VAL_PCT_FLOOR or TEST_PCT_FLOOR (typically 0.15).
+
+    Returns:
+        Block size: max(min_trades * bars_per_trade_estimate,
+                       int(allocatable * pct_floor))
+    """
+    bars_needed = min_trades * bars_per_trade_estimate
+    return max(bars_needed, int(allocatable * pct_floor))
+
+
+def _validate_allocation(
+    blocks: dict[str, int],
+    allocatable: int,
+    max_share: float,
+) -> bool:
+    """Validate that combined block sizes do not exceed a share ceiling.
+
+    Logs a single warning message showing all block sizes together if
+    validation fails. This preserves the original behavior of reporting
+    the complete picture in one log message, not separately per block.
+
+    Args:
+        blocks: Dictionary of {block_name: block_size} to validate.
+        allocatable: n_bars - embargo_total (total available for all blocks).
+        max_share: Ceiling on sum(blocks.values()) / allocatable
+            (typically MAX_VAL_TEST_SHARE = 0.45).
+
+    Returns:
+        True if validation passes, False if blocks exceed max_share.
+        When False is returned, a warning has been logged.
+    """
+    total = sum(blocks.values())
+    if total > allocatable * max_share:
+        # Format block info for logging (order: val, test if present)
+        block_items = ", ".join(f"{k}={v}" for k, v in sorted(blocks.items()))
+        logger.warning(
+            "Trade-count floors would push blocks to %.0f%% of allocatable "
+            "bars (cap=%.0f%%): %s allocatable=%d. "
+            "This would starve train — skipping instead of shipping an "
+            "unbalanced split.",
+            total / allocatable * 100, max_share * 100,
+            block_items, allocatable,
+        )
+        return False
+    return True
+
+
 def compute_dynamic_split(
     n_bars: int,
     swing_period: int,
@@ -177,24 +241,16 @@ def compute_dynamic_split(
     # both embargo gaps are set aside.
     allocatable = n_bars - embargo_total
 
-    # Allocate val and test from the end of the allocatable range.
-    # Each set takes the maximum of its minimum requirement and its
-    # fixed-percentage floor so that large datasets keep sensible proportions.
-    n_test  = max(test_bars_needed,  int(allocatable * TEST_PCT_FLOOR))
-    n_val   = max(val_bars_needed,   int(allocatable * VAL_PCT_FLOOR))
+    # Compute block sizes using floor logic (consistent with train_val_split).
+    n_val = _compute_block_floor(min_val_trades, bars_per_trade_estimate, allocatable, VAL_PCT_FLOOR)
+    n_test = _compute_block_floor(min_test_trades, bars_per_trade_estimate, allocatable, TEST_PCT_FLOOR)
 
-    if (n_val + n_test) > allocatable * max_val_test_share:
-        logger.warning(
-            "Trade-count floors would push val+test to %.0f%% of "
-            "allocatable bars (cap=%.0f%%): val=%d test=%d allocatable=%d "
-            "(swing_period=%d, min_val_trades=%d, min_test_trades=%d). "
-            "This would starve train — skipping asset instead of shipping "
-            "an unbalanced split. Lower the trade-count floors, gather "
-            "more history, or use a finer timeframe.",
-            (n_val + n_test) / allocatable * 100, max_val_test_share * 100,
-            n_val, n_test, allocatable,
-            swing_period, min_val_trades, min_test_trades,
-        )
+    # Validate combined allocation against the share ceiling in a single check.
+    if not _validate_allocation(
+        {"val": n_val, "test": n_test},
+        allocatable,
+        max_val_test_share,
+    ):
         return None
 
     n_train = allocatable - n_val - n_test
@@ -321,19 +377,15 @@ def compute_train_val_split(
 
     allocatable = n_bars - embargo_total
 
-    n_val = max(val_bars_needed, int(allocatable * VAL_PCT_FLOOR))
+    # Compute block size using floor logic (consistent with dynamic_split).
+    n_val = _compute_block_floor(min_val_trades, bars_per_trade_estimate, allocatable, VAL_PCT_FLOOR)
 
-    if n_val > allocatable * max_val_share:
-        logger.warning(
-            "Trade-count floor would push val to %.0f%% of "
-            "allocatable bars (cap=%.0f%%): val=%d allocatable=%d "
-            "(swing_period=%d, min_val_trades=%d). "
-            "This would starve train — skipping instead of shipping "
-            "an unbalanced split.",
-            n_val / allocatable * 100, max_val_share * 100,
-            n_val, allocatable,
-            swing_period, min_val_trades,
-        )
+    # Validate allocation against the share ceiling.
+    if not _validate_allocation(
+        {"val": n_val},
+        allocatable,
+        max_val_share,
+    ):
         return None
 
     n_train = allocatable - n_val
