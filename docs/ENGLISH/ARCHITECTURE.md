@@ -442,7 +442,7 @@ flowchart TD
 
     subgraph CLI_TOOLS[CLI & Diagnostics]
         AQ[aq.py CLI<br/>baseline / ab-test / diagnose-data]:::cli
-        DIAG[diagnostics/*.py<br/>Rigorous EDA / regimes / naive-baseline]:::cli
+        DIAG[legacy_archive/diagnostics/*.py<br/>Archived EDA / regimes / naive-baseline]:::cli
     end
 
     subgraph RUNTIME[Production Execution]
