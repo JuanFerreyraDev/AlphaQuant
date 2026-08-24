@@ -360,3 +360,182 @@ def add_funding_rate(df: pd.DataFrame, df_funding: pd.DataFrame) -> tuple[pd.Dat
     )
     df_merged.rename(columns={"funding_rate": "funding_rate_current"}, inplace=True)
     return df_merged, True
+
+
+def add_onchain_active_addresses(
+    df: pd.DataFrame, df_onchain: pd.DataFrame
+) -> tuple[pd.DataFrame, bool]:
+    """Add daily onchain active addresses onto sub-daily candles.
+
+    Replicates the exact ``shift + merge_asof(direction="backward")`` pattern
+    of :func:`add_trend_htf` — the only difference is the number of days
+    shifted before the merge.
+
+    Why +2 days (conservative shift)
+    ---------------------------------
+    Blockchain.com's ``n-unique-addresses`` metric is a *daily aggregate*:
+    it counts every unique address that appeared in any transaction during
+    the UTC calendar day.  Temporal availability reasoning:
+
+    * The day's data can only be **finalized** once the day closes at
+      ``23:59:59 UTC`` — so the earliest *theoretical* availability is
+      ``D+1 00:00 UTC`` (same as :func:`add_trend_htf`'s +1 day shift).
+    * Blockchain.com **does not publish a latency SLA** for this endpoint.
+      Without a documented guarantee, a +1 day shift cannot be relied
+      upon: the aggregation pipeline may not complete by D+1 00:00 UTC.
+    * The **conservative choice is +2 days**: this assumes up to 24 hours
+      of aggregation delay beyond the day close, with no empirical
+      verification of the actual Blockchain.com publish time.  It trades
+      one extra day of signal lag for a hard leakage-free guarantee.
+    * Decision documented here and in the leakage test
+      ``tests/features/test_onchain_active_addresses_leakage.py``.
+      Revisit if Blockchain.com publishes an official SLA in future.
+
+    Resulting temporal semantics
+    ----------------------------
+    * Any sub-daily bar opening during calendar day ``D`` inherits the
+      onchain value from day ``D-2`` (the last *conservatively available*
+      closed day).
+    * A bar at ``D 00:00 UTC`` inherits ``D-2``'s value (NOT ``D-1``).
+    * The first ``2 * 24h`` of bars in a series are ``NaN`` — confirming
+      the shift is real and no pre-release data sneaks through.
+
+    Args:
+        df: Sub-daily DataFrame (e.g. 4h, 1h) with OHLCV data and
+            technical indicators.  Index must be a ``DatetimeIndex``.
+        df_onchain: Daily onchain DataFrame with a single column
+            ``onchain_active_addresses``, typically loaded via
+            :func:`src.config.paths.load_onchain_active_addresses_csv`.
+            Index must be a midnight-aligned ``DatetimeIndex``.
+
+    Returns:
+        Tuple ``(df, has_onchain)`` indicating whether the feature was
+        added.  On failure the original ``df`` is returned unchanged.
+    """
+    if df_onchain.empty:
+        logger.warning(
+            "Onchain active addresses data is empty — feature will be skipped."
+        )
+        return df, False
+
+    required_col = "onchain_active_addresses"
+    if required_col not in df_onchain.columns:
+        logger.warning(
+            "Onchain DataFrame missing column '%s' — skipping. "
+            "Available columns: %s",
+            required_col,
+            list(df_onchain.columns),
+        )
+        return df, False
+
+    df_onchain = df_onchain[~df_onchain.index.duplicated(keep="last")].sort_index()
+
+    # CONSERVATIVE LEAKAGE PREVENTION (+2 days):
+    # Each daily entry's index is midnight of day D (its start / open time).
+    # The aggregate is only fully finalized at D+1 00:00 at the earliest.
+    # Blockchain.com publishes no latency SLA for this endpoint, so the
+    # actual publish time is unknown — up to 24h of delay beyond day close
+    # is assumed conservatively (no empirical verification of actual
+    # publish time). Shifting the index forward by 2 calendar days means
+    # a sub-daily bar during day D can at most see the value for day D-2.
+    df_onchain = df_onchain.copy()
+    df_onchain.index = df_onchain.index + pd.Timedelta(days=2)
+
+    df = df.sort_index()
+    df.index = df.index.astype("datetime64[ns]")
+    df_onchain.index = df_onchain.index.astype("datetime64[ns]")
+
+    df = pd.merge_asof(
+        df,
+        df_onchain[[required_col]],
+        left_index=True,
+        right_index=True,
+        direction="backward",
+    )
+    return df, True
+
+
+def add_mempool_fee_rate_p50(
+    df: pd.DataFrame, df_mempool: pd.DataFrame
+) -> tuple[pd.DataFrame, bool]:
+    """Add daily median mempool fee-rate (sat/vB) onto sub-daily candles.
+
+    Replicates the exact ``+1 day shift + merge_asof(direction="backward")``
+    pattern of :func:`add_trend_htf`.
+
+    Shift decision (+1 day)
+    ------------------------
+    The mempool.space backend indexes ``fee_rate_percentiles`` synchronously
+    in the same block-processing cycle as block confirmation, directly from
+    Bitcoin Core RPC (verified in ``backend/src/api/blocks.ts``).  There is
+    no async pipeline or artificial delay.  Data is available within seconds
+    of block confirmation.
+
+    However, each entry in the ``fee-rates/all`` endpoint represents a full
+    calendar day of ~144 confirmed blocks.  The daily aggregate is only
+    complete once the day has closed — i.e. no earlier than ``D+1 00:00 UTC``.
+    A **+1 day shift** is therefore both necessary and sufficient:
+
+    * +1 day (like ``trend_htf``): appropriate because mempool.space has no
+      publication SLA but the open-source code shows no artificial delay —
+      the data is available as soon as the last block of the day is indexed.
+    * +2 days (like ``onchain_active_addresses``) would be overly conservative
+      given the transparent, synchronous indexing architecture.
+
+    Resulting temporal semantics
+    ----------------------------
+    * Sub-daily bars opening during day D → inherit value from day D-1.
+    * Bar at D+1 00:00 UTC → inherits the just-closed day D value.
+    * First calendar day of bars → NaN (no closed day available yet).
+
+    Args:
+        df: Sub-daily DataFrame (e.g. 4h, 1h) with OHLCV data and
+            technical indicators.  Index must be a ``DatetimeIndex``.
+        df_mempool: Daily mempool fee-rate DataFrame with a single column
+            ``mempool_fee_rate_p50`` (sat/vB), typically loaded via
+            :func:`src.config.paths.load_mempool_fee_rate_csv`.
+            Index must be a midnight-aligned ``DatetimeIndex``.
+
+    Returns:
+        Tuple ``(df, has_mempool_fee_rate)`` indicating whether the feature
+        was added.  On failure the original ``df`` is returned unchanged.
+    """
+    if df_mempool.empty:
+        logger.warning(
+            "Mempool fee-rate data is empty — feature will be skipped."
+        )
+        return df, False
+
+    required_col = "mempool_fee_rate_p50"
+    if required_col not in df_mempool.columns:
+        logger.warning(
+            "Mempool DataFrame missing column '%s' — skipping. "
+            "Available columns: %s",
+            required_col,
+            list(df_mempool.columns),
+        )
+        return df, False
+
+    df_mempool = df_mempool[~df_mempool.index.duplicated(keep="last")].sort_index()
+
+    # +1 DAY SHIFT (same rationale as add_trend_htf):
+    # Each daily entry's index is midnight of day D (its start / open time).
+    # The daily aggregate is complete at D+1 00:00 UTC at the earliest.
+    # Shifting the index forward by 1 day makes the value "available" only
+    # from D+1 00:00 onward — merge_asof(backward) then correctly picks
+    # the most recent fully-closed day for every sub-daily bar.
+    df_mempool = df_mempool.copy()
+    df_mempool.index = df_mempool.index + pd.Timedelta(days=1)
+
+    df = df.sort_index()
+    df.index = df.index.astype("datetime64[ns]")
+    df_mempool.index = df_mempool.index.astype("datetime64[ns]")
+
+    df = pd.merge_asof(
+        df,
+        df_mempool[[required_col]],
+        left_index=True,
+        right_index=True,
+        direction="backward",
+    )
+    return df, True

@@ -1,4 +1,4 @@
-"""Leakage verification test for add_funding_rate.
+"""Leakage verification tests for add_funding_rate.
 
 Binance USD-M Futures funding settles every 8 hours: 00:00, 08:00, 16:00 UTC.
 Each settlement's timestamp in the CSV is the EXACT moment the rate is
@@ -6,188 +6,155 @@ applied / becomes known.  Verifies that every sub-daily bar inherits the
 funding rate from the MOST RECENT SETTLEMENT that happened AT OR BEFORE
 the bar's open timestamp — never the still-upcoming funding settlement.
 
-Run: python3 tests/features/test_funding_rate_leakage.py
+Each test_ function is independently collectable by pytest.
 """
 
-import sys
-from pathlib import Path
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+import pytest
 
 from src.brain.features import add_funding_rate
 
 
-def main() -> None:
-    print("=" * 70)
-    print("LEAKAGE VERIFICATION: add_funding_rate merge_asof temporal ordering")
-    print("=" * 70)
+# ---------------------------------------------------------------------------
+# Shared fixture helpers
+# ---------------------------------------------------------------------------
 
-    # ------------------------------------------------------------------
-    # Step 1 — Build synthetic funding rate history with DISTINCT values
-    #   at every 8-hour settlement mark so we can trace exactly which
-    #   settlement was joined to each sub-daily bar.
-    #
-    #   Funding liquidation times (Binance convention):
-    #     2024-01-02 00:00  → funding_val_0 (val = -0.00010)
-    #     2024-01-02 08:00  → funding_val_8 (val = +0.00005)
-    #     2024-01-02 16:00  → funding_val_16 (val = -0.00020)
-    #     2024-01-03 00:00  → funding_val_24 (val = +0.00030)
-    #     2024-01-03 08:00  → funding_val_32 (val = -0.00015)
-    # ------------------------------------------------------------------
+def _build_funding_df() -> tuple[pd.DataFrame, tuple]:
+    """Return (df_funding, (S0, S1, S2, S3, S4)) with distinct values."""
     settlement_dts = [
         pd.Timestamp("2024-01-02 00:00:00"),  # S0
-        pd.Timestamp("2024-01-02 08:00:00"),  # S1 — 8h later
-        pd.Timestamp("2024-01-02 16:00:00"),  # S2 — 16h
-        pd.Timestamp("2024-01-03 00:00:00"),  # S3 — 24h (next midnight)
-        pd.Timestamp("2024-01-03 08:00:00"),  # S4 — 32h
+        pd.Timestamp("2024-01-02 08:00:00"),  # S1
+        pd.Timestamp("2024-01-02 16:00:00"),  # S2
+        pd.Timestamp("2024-01-03 00:00:00"),  # S3
+        pd.Timestamp("2024-01-03 08:00:00"),  # S4
     ]
-    # Values intentionally well-separated so any mis-match is obvious
     distinct_vals = np.array([-10e-5, +5e-5, -20e-5, +30e-5, -15e-5])
-    S0, S1, S2, S3, S4 = distinct_vals
-
     df_funding = pd.DataFrame(
         {"funding_rate": distinct_vals},
         index=pd.DatetimeIndex(settlement_dts),
     )
-    print(f"\nSynthetic funding settlements (5 rows, 8-hour cadence):")
-    for i, (ts, v) in enumerate(zip(settlement_dts, distinct_vals)):
-        print(f"  S{i}: {ts}  →  funding_rate_current = {v:+.6f}")
+    return df_funding, tuple(distinct_vals)
 
-    # ------------------------------------------------------------------
-    # Step 2 — Build sub-daily (4h + 1h) candles placed at the CRITICAL
-    # timestamps around each of the 5 settlement boundaries.  For each
-    # candle we state the EXPECTED funding value.
-    #
-    # KEY: the funding timestamp = SETTLEMENT (availability) time, so:
-    #   * A bar at time T sees the most recent settlement ≤ T.
-    #   * A bar at exactly the settlement time (e.g. 08:00:00) MAY see
-    #     that settlement (it settles at 08:00:00 exactly — bar opens at
-    #     08:00:00, so value is available at bar open → correct).
-    # ------------------------------------------------------------------
-    sub_dts = [
-        # --------- BEFORE S1 (the 2024-01-02 08:00 settlement) ----------
-        # 4h candles opening before 08:00 on Jan 2: S0 is the latest known
-        pd.Timestamp("2024-01-02 00:00:00"),   # exactly at S0 → S0
-        pd.Timestamp("2024-01-02 04:00:00"),   # 4h after S0, S1 in 4h → S0
-        pd.Timestamp("2024-01-02 07:00:00"),   # 1h bar at 07:00, S1 in 1h → S0
-        pd.Timestamp("2024-01-02 07:59:59"),   # 1s BEFORE S1 → S0 (critical!)
-        # ----- AT & AFTER S1 (2024-01-02 08:00:00 settlement) -----
-        pd.Timestamp("2024-01-02 08:00:00"),   # exactly at S1 → S1
-        pd.Timestamp("2024-01-02 08:00:01"),   # 1s AFTER S1 → S1
-        pd.Timestamp("2024-01-02 12:00:00"),   # 4h bar at 12:00 → S1
-        pd.Timestamp("2024-01-02 15:00:00"),   # 1h at 15:00, S2 in 1h → S1
-        pd.Timestamp("2024-01-02 15:59:59"),   # 1s BEFORE S2 → S1
-        # ----- AT & AFTER S2 (2024-01-02 16:00:00 settlement) -----
-        pd.Timestamp("2024-01-02 16:00:00"),   # exactly at S2 → S2
-        pd.Timestamp("2024-01-02 20:00:00"),   # 4h bar 20:00 → S2
-        pd.Timestamp("2024-01-02 23:59:59"),   # 1s BEFORE S3 (midnight) → S2
-        # ----- AT & AFTER S3 (2024-01-03 00:00:00 settlement) -----
-        pd.Timestamp("2024-01-03 00:00:00"),   # exactly at S3 → S3
-        pd.Timestamp("2024-01-03 04:00:00"),   # 4h bar 04:00 → S3
-        pd.Timestamp("2024-01-03 07:59:59"),   # 1s BEFORE S4 → S3
-        # ----- AT & AFTER S4 (2024-01-03 08:00:00 settlement) -----
-        pd.Timestamp("2024-01-03 08:00:00"),   # exactly at S4 → S4
-        pd.Timestamp("2024-01-03 12:00:00"),   # 4h bar 12:00 → S4
-    ]
-    expected_vals = [
-        S0, S0, S0, S0,   # before / at S0 → S0
-        S1, S1, S1, S1, S1,  # at / after S1 → S1
-        S2, S2, S2,       # at / after S2 → S2
-        S3, S3, S3,       # at / after S3 → S3
-        S4, S4,           # at / after S4 → S4
-    ]
-    assert len(sub_dts) == len(expected_vals), "test setup error"
 
-    n_sub = len(sub_dts)
-    df_sub = pd.DataFrame(
-        {
-            "close": np.linspace(42000.0, 42500.0, n_sub),
-            "atr_14": np.ones(n_sub) * 800.0,
-        },
-        index=pd.DatetimeIndex(sub_dts),
+def _make_sub_df(timestamps: list[pd.Timestamp]) -> pd.DataFrame:
+    n = len(timestamps)
+    return pd.DataFrame(
+        {"close": np.linspace(42000.0, 42500.0, n), "atr_14": np.ones(n) * 800.0},
+        index=pd.DatetimeIndex(timestamps),
     )
 
-    # ------------------------------------------------------------------
-    # Step 3 — Run add_funding_rate and verify every single assignment
-    # ------------------------------------------------------------------
-    df_merged, ok = add_funding_rate(df_sub, df_funding)
-    assert ok is True, "add_funding_rate returned False unexpectedly"
-    assert "funding_rate_current" in df_merged.columns, "output column missing"
 
-    print(f"\n{'Sub-daily timestamp':<25} {'Expected':>10} {'Got':>10} {'Match':>7}")
-    print("-" * 58)
+# ---------------------------------------------------------------------------
+# Test 1 — add_funding_rate succeeds and produces the output column
+# ---------------------------------------------------------------------------
 
-    errors: list[str] = []
+def test_add_funding_rate_returns_true_and_column() -> None:
+    df_funding, (S0, *_) = _build_funding_df()
+    df_sub = _make_sub_df([pd.Timestamp("2024-01-02 04:00:00")])
+    df_out, ok = add_funding_rate(df_sub, df_funding)
+    assert ok is True
+    assert "funding_rate_current" in df_out.columns
 
-    for ts, expected in zip(sub_dts, expected_vals):
-        got = df_merged.loc[ts, "funding_rate_current"]
-        match = abs(got - expected) < 1e-12
-        status = "✓" if match else "✗ LEAK!"
-        print(
-            f"{str(ts):<25} {expected:>+10.6f} {got:>+10.6f} {status:>7}"
-        )
-        if not match:
-            errors.append(
-                f"LEAK at {ts}: expected {expected:+.6f} "
-                f"(latest settled funding ≤ bar open), got {got:+.6f} — "
-                f"a FUTURE (not-yet-settled) funding rate leaked!"
-            )
 
-    print("-" * 58)
+# ---------------------------------------------------------------------------
+# Test 2 — Bars before and at S0 (00:00 settlement)
+# ---------------------------------------------------------------------------
 
-    # ------------------------------------------------------------------
-    # Step 4 — Edge case: bar BEFORE first settlement → must be NaN
-    # ------------------------------------------------------------------
-    pre_dts = [pd.Timestamp("2024-01-01 12:00:00")]  # 12h before S0
-    df_pre = pd.DataFrame(
-        {"close": [42000.0]}, index=pd.DatetimeIndex(pre_dts)
-    )
-    df_merged_pre, _ = add_funding_rate(df_pre, df_funding)
-    pre_val = df_merged_pre.loc[pre_dts[0], "funding_rate_current"]
-    print(f"\nBar *before first settlement* funding_rate_current is NaN:",
-          pd.isna(pre_val))
-    if not pd.isna(pre_val):
-        errors.append(
-            f"Bar before any settlement should be NaN, got {pre_val:+.6f}"
+def test_bars_at_and_before_first_settlement() -> None:
+    df_funding, (S0, S1, S2, S3, S4) = _build_funding_df()
+
+    timestamps = [
+        pd.Timestamp("2024-01-02 00:00:00"),  # exactly at S0 → S0
+        pd.Timestamp("2024-01-02 04:00:00"),  # 4h after S0, before S1 → S0
+        pd.Timestamp("2024-01-02 07:00:00"),  # 1h before S1 → S0
+        pd.Timestamp("2024-01-02 07:59:59"),  # 1s before S1 → S0 (critical)
+    ]
+    df_sub = _make_sub_df(timestamps)
+    df_out, _ = add_funding_rate(df_sub, df_funding)
+
+    for ts in timestamps:
+        got = df_out.loc[ts, "funding_rate_current"]
+        assert abs(got - S0) < 1e-12, (
+            f"Bar at {ts}: expected S0={S0:+.6f}, got {got:+.6f}"
         )
 
-    # ------------------------------------------------------------------
-    # Step 5 — Critical boundary: bar at 07:59:59 (1s before S1) must
-    # NOT see S1.  This is the single most important assertion in the
-    # whole test — it catches the classic off-by-one in merge_asof when
-    # timestamps are "near" each other.
-    # ------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Test 3 — CRITICAL boundary: 1 second before S1 must NOT see S1
+# ---------------------------------------------------------------------------
+
+def test_one_second_before_settlement_does_not_leak_next() -> None:
+    """The single most important boundary check: T-1s before settlement."""
+    df_funding, (S0, S1, *_) = _build_funding_df()
+
     critical_ts = pd.Timestamp("2024-01-02 07:59:59")
-    crit_got = df_merged.loc[critical_ts, "funding_rate_current"]
-    crit_ok = abs(crit_got - S0) < 1e-12  # must be S0, not S1
-    print(f"\n[CRITICAL] Bar at {critical_ts} (1s before 08:00 settlement) "
-          f"sees funding={crit_got:+.6f} → expected S0={S0:+.6f}: "
-          + ("✓ CORRECT" if crit_ok else "✗ WRONG — leaks future S1!"))
-    if not crit_ok:
-        errors.append(
-            f"CRITICAL BOUNDARY FAILURE at {critical_ts}: 1s before 08:00 "
-            f"settlement, bar sees S1={crit_got:+.6f} instead of "
-            f"S0={S0:+.6f}. merge_asof semantics broken!"
+    df_sub = _make_sub_df([critical_ts])
+    df_out, _ = add_funding_rate(df_sub, df_funding)
+
+    got = df_out.loc[critical_ts, "funding_rate_current"]
+    assert abs(got - S0) < 1e-12, (
+        f"CRITICAL BOUNDARY FAILURE: 1s before 08:00 settlement "
+        f"got {got:+.6f} (S1={S1:+.6f}), expected S0={S0:+.6f}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 4 — Bars at and after each settlement pick up the new value
+# ---------------------------------------------------------------------------
+
+def test_bars_at_each_settlement_see_new_value() -> None:
+    df_funding, (S0, S1, S2, S3, S4) = _build_funding_df()
+
+    timestamps = [
+        pd.Timestamp("2024-01-02 08:00:00"),   # exactly at S1 → S1
+        pd.Timestamp("2024-01-02 08:00:01"),   # 1s after S1 → S1
+        pd.Timestamp("2024-01-02 12:00:00"),   # 4h after S1 → S1
+        pd.Timestamp("2024-01-02 15:59:59"),   # 1s before S2 → S1
+        pd.Timestamp("2024-01-02 16:00:00"),   # exactly at S2 → S2
+        pd.Timestamp("2024-01-02 20:00:00"),   # after S2 → S2
+        pd.Timestamp("2024-01-02 23:59:59"),   # 1s before S3 → S2
+        pd.Timestamp("2024-01-03 00:00:00"),   # exactly at S3 → S3
+        pd.Timestamp("2024-01-03 04:00:00"),   # after S3 → S3
+        pd.Timestamp("2024-01-03 07:59:59"),   # 1s before S4 → S3
+        pd.Timestamp("2024-01-03 08:00:00"),   # exactly at S4 → S4
+        pd.Timestamp("2024-01-03 12:00:00"),   # after S4 → S4
+    ]
+    expected = [S1, S1, S1, S1, S2, S2, S2, S3, S3, S3, S4, S4]
+
+    df_sub = _make_sub_df(timestamps)
+    df_out, _ = add_funding_rate(df_sub, df_funding)
+
+    for ts, exp in zip(timestamps, expected):
+        got = df_out.loc[ts, "funding_rate_current"]
+        assert abs(got - exp) < 1e-12, (
+            f"Bar at {ts}: expected {exp:+.6f}, got {got:+.6f}"
         )
 
-    # ------------------------------------------------------------------
-    # Summary
-    # ------------------------------------------------------------------
-    if errors:
-        print("\n❌ FAILURE — leakage detected!")
-        for e in errors:
-            print(f"   • {e}")
-        sys.exit(1)
-    else:
-        print("\n✅ PASS — zero leakage. add_funding_rate temporal ordering is correct.")
-        print("   • Bars BEFORE a settlement → prior settlement value (never peek future)")
-        print("   • Bar AT EXACT settlement time → the just-settled value (available at open)")
-        print("   • Bar AFTER settlement → correct latest known value")
-        print("   • Bar before any settlement → NaN (no phantom data)")
+
+# ---------------------------------------------------------------------------
+# Test 5 — Bar BEFORE any settlement must be NaN
+# ---------------------------------------------------------------------------
+
+def test_bar_before_any_settlement_is_nan() -> None:
+    df_funding, _ = _build_funding_df()
+    pre_ts = pd.Timestamp("2024-01-01 12:00:00")  # 12h before first settlement
+    df_sub = _make_sub_df([pre_ts])
+    df_out, _ = add_funding_rate(df_sub, df_funding)
+    val = df_out.loc[pre_ts, "funding_rate_current"]
+    assert pd.isna(val), (
+        f"Bar before any settlement should be NaN, got {val:+.6f}"
+    )
 
 
-if __name__ == "__main__":
-    main()
+# ---------------------------------------------------------------------------
+# Test 6 — Empty funding data returns (df, False)
+# ---------------------------------------------------------------------------
+
+def test_empty_funding_returns_false() -> None:
+    df_sub = _make_sub_df([pd.Timestamp("2024-01-02 04:00")])
+    df_out, ok = add_funding_rate(df_sub, pd.DataFrame())
+    assert ok is False
+    assert "funding_rate_current" not in df_out.columns

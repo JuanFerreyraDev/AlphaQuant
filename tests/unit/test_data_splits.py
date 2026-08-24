@@ -1,5 +1,7 @@
 """Tests for src.utils.data_splits — data split utilities."""
 
+import logging
+
 import pytest
 
 from src.utils.data_splits import (
@@ -8,6 +10,7 @@ from src.utils.data_splits import (
     compute_dynamic_split,
     compute_min_val_trades,
     compute_split_boundaries,
+    compute_train_val_split,
     get_calibrated_constants,
 )
 
@@ -187,3 +190,134 @@ class TestComputeMinValTrades:
             n_val_bars=2000, swing_period=5, bars_per_trade_safety_factor=10,
         )
         assert conservative <= optimistic
+
+
+class TestComputeTrainValSplit:
+    """Tests for 2-part train/val split (no test set)."""
+
+    def test_sufficient_data(self) -> None:
+        """Ample data yields a split with sensible proportions
+        (trade-count floor doesn't bind; percentage floor does)."""
+        result = compute_train_val_split(n_bars=5000, swing_period=5, embargo_days=5)
+        assert result is not None
+        n_train, n_val = result
+        assert n_train >= 200
+        assert n_val >= 60
+        # sizes sum to n_bars minus the embargo gap
+        assert n_train + n_val == 5000 - 5
+        allocatable = n_train + n_val
+        # with ample data, val lands around 15%
+        assert n_val / allocatable == pytest.approx(0.15, abs=0.01)
+
+    def test_insufficient_data(self) -> None:
+        """Returns None when there are too few bars for the trade-count floor."""
+        result = compute_train_val_split(n_bars=100, swing_period=5, embargo_days=5)
+        assert result is None
+
+    def test_split_sizes_sum_to_allocatable(self) -> None:
+        """Train and val partitions sum to n_bars minus embargo gap."""
+        n_bars = 5000
+        embargo_days = 7
+        result = compute_train_val_split(
+            n_bars=n_bars, swing_period=7, embargo_days=embargo_days
+        )
+        assert result is not None
+        assert sum(result) == n_bars - embargo_days
+
+    def test_embargo_shrinks_allocatable_bars(self) -> None:
+        """A bigger embargo leaves less room for train/val, all else equal."""
+        small_embargo = compute_train_val_split(n_bars=5000, swing_period=5, embargo_days=2)
+        large_embargo = compute_train_val_split(n_bars=5000, swing_period=5, embargo_days=50)
+        assert small_embargo is not None
+        assert large_embargo is not None
+        assert sum(large_embargo) < sum(small_embargo)
+
+    def test_high_val_floor_starves_train_returns_none(self) -> None:
+        """When the val trade-count floor would push val past max_val_share,
+        the split is rejected instead of silently shipping a starved train set.
+        Used when val floor alone exceeds the share ceiling.
+        """
+        result = compute_train_val_split(
+            n_bars=1500, swing_period=10, embargo_days=10,
+            min_val_trades=20,
+            bars_per_trade_safety_factor=5,
+            max_val_share=0.45,
+        )
+        assert result is None
+
+    def test_val_share_cap_rejects_unbalanced_split(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Regression test for the _compute_block_floor/_validate_allocation refactor (2026-08).
+
+        Locks in the exact rejection behavior BEFORE the refactor: when val
+        alone already exceeds max_val_share, the split is still rejected
+        (same final decision), AND the warning log still reports val clearly
+        — not lost, not diluted, present for debugging.
+
+        This is the critical edge case that a naive "validate val immediately
+        with other_blocks_size=0" design would get wrong by silencing the
+        computation of val too early.
+
+        Expected log (baseline from 2026-08-14):
+          "Trade-count floor would push val to 67% of allocatable bars
+          (cap=45%): val=1000 allocatable=1490 (swing_period=10, min_val_trades=20). ..."
+        """
+        with caplog.at_level(logging.WARNING):
+            result = compute_train_val_split(
+                n_bars=1500, swing_period=10, embargo_days=10,
+                min_val_trades=20,
+                bars_per_trade_safety_factor=5,
+                max_val_share=0.45,
+            )
+
+        assert result is None
+        warning_msgs = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warning_msgs) == 1
+        # Verify that val is explicitly mentioned with its calculated size
+        assert "val=1000" in warning_msgs[0]
+        # Verify that the percentage and cap are both logged
+        assert "67%" in warning_msgs[0]  # n_val / allocatable * 100
+        assert "45%" in warning_msgs[0]  # max_val_share * 100
+        assert "allocatable=1490" in warning_msgs[0]
+
+
+class TestComputeDynamicSplitRegressionLogging:
+    """Regression tests for the _compute_block_floor/_validate_allocation refactor (2026-08).
+
+    These tests lock in the exact logging behavior of compute_dynamic_split
+    to ensure that after refactoring, logs still report the complete picture
+    (both val and test) in a single message, not separately or prematurely.
+    """
+
+    def test_val_plus_test_share_cap_shows_both_blocks(self, caplog: pytest.LogCaptureFixture) -> None:
+        """When val+test together would exceed the share ceiling, the warning
+        log shows BOTH block sizes in one message — not separate messages,
+        not just the first block that triggers the check.
+
+        This is the critical behavior preserved by choosing _compute_block_floor
+        (pure calculation) + _validate_allocation (single validation pass)
+        instead of _estimate_block_size (per-block validation).
+
+        Expected log (baseline from 2026-08-14):
+          "Trade-count floors would push val+test to 76% of allocatable bars
+          (cap=45%): val=750 test=750 allocatable=1980"
+        """
+        with caplog.at_level(logging.WARNING):
+            result = compute_dynamic_split(
+                n_bars=2000, swing_period=10, embargo_days=10,
+                min_val_trades=15, min_test_trades=15,
+                bars_per_trade_safety_factor=5,
+                max_val_test_share=0.45,
+            )
+
+        assert result is None
+        warning_msgs = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warning_msgs) == 1
+        # Verify that BOTH blocks appear in the SAME message
+        assert "val=" in warning_msgs[0]
+        assert "test=" in warning_msgs[0]
+        # Verify the exact calculated sizes match
+        assert "val=750" in warning_msgs[0]
+        assert "test=750" in warning_msgs[0]
+        # Verify the share calculation
+        assert "76%" in warning_msgs[0]  # (750 + 750) / 1980 * 100 ≈ 76%
+        assert "45%" in warning_msgs[0]  # max_val_test_share * 100

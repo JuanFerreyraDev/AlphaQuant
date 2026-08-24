@@ -130,3 +130,95 @@ def get_report_path(symbol: str, experiment_name: str, timestamp: str | None = N
     stamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
     return get_report_dir(safe_symbol) / f"{experiment_name}_{stamp}.json"
 
+
+
+def get_onchain_active_addresses_path(symbol: str) -> Path:
+    """Return the canonical path for BTC onchain active addresses CSV.
+
+    Layout::
+
+        data/raw_csv/{safe_symbol}/onchain_active_addresses.csv
+
+    Args:
+        symbol: Trading pair in safe format (e.g. ``'BTC_USDT'``).
+
+    Returns:
+        ``pathlib.Path`` to the CSV file.
+    """
+    safe_symbol = _sanitize_symbol(symbol)
+    return (
+        get_project_root()
+        / "data"
+        / "raw_csv"
+        / safe_symbol
+        / "onchain_active_addresses.csv"
+    )
+
+
+def load_onchain_active_addresses_csv(symbol: str) -> pd.DataFrame:
+    """Load a previously downloaded onchain active addresses CSV.
+
+    The CSV is expected to have a single column ``onchain_active_addresses``
+    indexed by ``timestamp`` (midnight-aligned UTC, stored as tz-naive
+    ``datetime64[ns]``).
+
+    Args:
+        symbol: Trading pair in safe format (e.g. ``'BTC_USDT'``).
+
+    Returns:
+        DataFrame with DatetimeIndex and an ``onchain_active_addresses``
+        column.  Empty DataFrame if the file does not exist.
+    """
+    path = get_onchain_active_addresses_path(symbol)
+    if not path.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(path)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df.set_index("timestamp", inplace=True)
+    return df
+
+
+def get_mempool_fee_rate_path(symbol: str) -> Path:
+    """Return the canonical path for the mempool fee-rate p50 CSV.
+
+    Layout::
+
+        data/raw_csv/{safe_symbol}/onchain_mempool_fee_rate_p50.csv
+
+    Args:
+        symbol: Trading pair in safe format (e.g. ``'BTC_USDT'``).
+
+    Returns:
+        ``pathlib.Path`` to the CSV file.
+    """
+    safe_symbol = _sanitize_symbol(symbol)
+    return (
+        get_project_root()
+        / "data"
+        / "raw_csv"
+        / safe_symbol
+        / "onchain_mempool_fee_rate_p50.csv"
+    )
+
+
+def load_mempool_fee_rate_csv(symbol: str) -> pd.DataFrame:
+    """Load a previously downloaded mempool fee-rate p50 CSV.
+
+    The CSV is expected to have a single column ``mempool_fee_rate_p50``
+    (median fee-rate in sat/vB) indexed by ``timestamp`` (midnight-aligned
+    UTC, stored as tz-naive ``datetime64[ns]``).
+
+    Args:
+        symbol: Trading pair in safe format (e.g. ``'BTC_USDT'``).
+
+    Returns:
+        DataFrame with DatetimeIndex and a ``mempool_fee_rate_p50`` column.
+        Empty DataFrame if the file does not exist.
+    """
+    path = get_mempool_fee_rate_path(symbol)
+    if not path.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(path)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df.set_index("timestamp", inplace=True)
+    return df

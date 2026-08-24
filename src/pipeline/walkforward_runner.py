@@ -16,12 +16,12 @@ from src.config.experiment_defaults import (
     DEFAULT_TIMEFRAMES,
     ExperimentConfig,
     FORMULATIONS,
-    MIN_BASELINE_DELTA_P5,
 )
 from src.config.paths import _sanitize_symbol, get_report_dir, get_report_path
 from src.pipeline.dataset_builder import build_dataset
 from src.pipeline.feature_profiles import get_profile
 from src.utils.oos_validation import (
+    MIN_BOOTSTRAP_P5,
     MIN_POOLED_TRADES,
     WalkForwardResult,
     _profit_factor,
@@ -83,6 +83,9 @@ def _baseline_row(
         if result.model_rets_all
         else np.array([])
     )
+    # Informational context only — NOT used in gate decision.
+    # Gate is derived exclusively from result.passes_gate (see oos_validation.py line ~461).
+    # Absolute PF > 1.0 is NOT a gate criterion (see WORKFLOW.md Appendix B).
     pooled_pf_point = _profit_factor(pooled_rets)
     p5_delta, p95_delta = result.pooled_delta_bootstrap
     passes = result.passes_gate
@@ -162,7 +165,7 @@ def run_baseline(
     print(
         f"Swing={cfg.swing_period}  TP={cfg.tp_multi}xATR  SL={cfg.sl_multi}xATR  "
         f"Window={cfg.window_months}m  Step={cfg.step_months}m  "
-        f"Gate: ΔPF p5 > {MIN_BASELINE_DELTA_P5} (model vs naive_long)"
+        f"Gate: ΔPF p5 > {MIN_BOOTSTRAP_P5} (model vs naive_long)"
     )
     print("=" * 90)
 
@@ -229,7 +232,7 @@ def run_baseline(
         "symbol": safe,
         "profile": "control",
         "config": asdict(cfg),
-        "gate_threshold_delta_pf_p5": MIN_BASELINE_DELTA_P5,
+        "gate_threshold_delta_pf_p5": MIN_BOOTSTRAP_P5,
         "elapsed_seconds": round(time.time() - t0, 1),
         "results": rows,
     }
